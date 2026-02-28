@@ -1,6 +1,8 @@
 #include "api/CommandController.h"
 #include <iostream>
 #include <chrono>
+#include <future>
+#include <vector>
 
 CommandController::CommandController(std::shared_ptr<IntentClassifier> tier1,
                                      std::shared_ptr<IntentClassifier> tier2,
@@ -106,24 +108,33 @@ IntentResult CommandController::runPipeline(const VoiceCommand& command) {
         SplitResult split = tier3_->split(command);  // virtual: LLMClassifier overrides
 
         if (!split.sub_commands.empty()) {
+            // Launch all sub-pipelines in parallel — each is independent I/O
+            // (vector search + HA HTTP call), no shared mutable state.
+            std::vector<std::future<IntentResult>> futures;
+            futures.reserve(split.sub_commands.size());
+            for (const auto& subText : split.sub_commands) {
+                VoiceCommand sub;
+                sub.text       = subText;
+                sub.device_id  = command.device_id;
+                sub.confidence = 1.0f;
+                futures.push_back(std::async(std::launch::async,
+                    [this, sub]() { return runSinglePipeline(sub); }));
+            }
+
+            // Collect results in original order
             Json::Value executedCmds(Json::arrayValue);
             bool allOk = true;
             std::string combinedResponse;
 
-            for (const auto& subText : split.sub_commands) {
-                VoiceCommand sub;
-                sub.text      = subText;
-                sub.device_id = command.device_id;
-                sub.confidence = 1.0f;
-
-                IntentResult subResult = runSinglePipeline(sub);
+            for (size_t i = 0; i < split.sub_commands.size(); ++i) {
+                IntentResult subResult = futures[i].get();
                 allOk = allOk && subResult.success;
 
                 Json::Value entry;
-                entry["text"]    = subText;
-                entry["tier"]    = subResult.tier;
-                entry["intent"]  = subResult.intent;
-                entry["success"] = subResult.success;
+                entry["text"]     = split.sub_commands[i];
+                entry["tier"]     = subResult.tier;
+                entry["intent"]   = subResult.intent;
+                entry["success"]  = subResult.success;
                 entry["entities"] = subResult.entities;
                 executedCmds.append(entry);
 
