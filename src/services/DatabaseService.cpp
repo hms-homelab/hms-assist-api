@@ -43,7 +43,7 @@ int DatabaseService::logVoiceCommand(const VoiceCommand& command) {
     try {
         pqxx::work txn(*conn_);
 
-        std::string query = "INSERT INTO voice_commands (device_id, command_text, confidence) "
+        std::string query = "INSERT INTO voice_commands (device_id, text, confidence) "
                            "VALUES (" + txn.quote(command.device_id) + ", " +
                            txn.quote(command.text) + ", " +
                            std::to_string(command.confidence) + ") RETURNING id";
@@ -72,15 +72,10 @@ bool DatabaseService::logIntentResult(int commandId, const IntentResult& result)
     try {
         pqxx::work txn(*conn_);
 
-        // Convert entities to PostgreSQL array format
-        std::string entities_array = "ARRAY[";
-        bool first = true;
-        for (const auto& key : result.entities.getMemberNames()) {
-            if (!first) entities_array += ", ";
-            entities_array += txn.quote(key + "=" + result.entities[key].asString());
-            first = false;
-        }
-        entities_array += "]";
+        // Serialize entities as JSONB
+        Json::StreamWriterBuilder writer;
+        writer["indentation"] = "";
+        std::string entities_json = Json::writeString(writer, result.entities);
 
         std::string query = "INSERT INTO intent_results "
                            "(command_id, intent, tier, confidence, response_text, processing_time_ms, success, entities) "
@@ -92,7 +87,7 @@ bool DatabaseService::logIntentResult(int commandId, const IntentResult& result)
                            txn.quote(result.response_text) + ", " +
                            std::to_string(result.processing_time_ms) + ", " +
                            std::string(result.success ? "true" : "false") + ", " +
-                           entities_array + ")";
+                           txn.quote(entities_json) + "::jsonb)";
 
         txn.exec(query);
         txn.commit();

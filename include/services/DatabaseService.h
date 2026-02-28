@@ -9,22 +9,22 @@
 class DatabaseService {
 public:
     DatabaseService(const std::string& connectionString);
-    ~DatabaseService();
+    virtual ~DatabaseService();
 
-    bool connect();
-    void disconnect();
-    bool isConnected() const { return connected_; }
+    virtual bool connect();
+    virtual void disconnect();
+    virtual bool isConnected() const { return connected_; }
 
     // Log voice command
-    int logVoiceCommand(const VoiceCommand& command);
+    virtual int logVoiceCommand(const VoiceCommand& command);
 
     // Log intent result
-    bool logIntentResult(int commandId, const IntentResult& result);
+    virtual bool logIntentResult(int commandId, const IntentResult& result);
 
     // Get statistics
-    int getTotalCommands();
-    int getSuccessfulIntents();
-    std::map<std::string, int> getIntentDistribution();
+    virtual int getTotalCommands();
+    virtual int getSuccessfulIntents();
+    virtual std::map<std::string, int> getIntentDistribution();
 
 private:
     std::string connectionString_;

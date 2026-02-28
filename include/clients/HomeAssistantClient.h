@@ -17,25 +17,26 @@ struct Entity {
 class HomeAssistantClient {
 public:
     HomeAssistantClient(const std::string& baseUrl, const std::string& bearerToken);
+    virtual ~HomeAssistantClient() = default;
 
     // Get all entities
-    std::vector<Entity> getAllEntities();
+    virtual std::vector<Entity> getAllEntities();
 
     // Get specific entity state
-    Entity getEntityState(const std::string& entityId);
+    virtual Entity getEntityState(const std::string& entityId);
 
     // Find entities by fuzzy matching (e.g., "kitchen" -> "light.kitchen_ceiling")
-    std::vector<Entity> findEntities(const std::string& query, const std::string& domain = "");
+    virtual std::vector<Entity> findEntities(const std::string& query, const std::string& domain = "");
 
     // Call Home Assistant service
-    bool callService(const std::string& domain, const std::string& service,
+    virtual bool callService(const std::string& domain, const std::string& service,
                     const std::string& entityId, const Json::Value& parameters = Json::Value());
 
     // Common service shortcuts
-    bool turnOn(const std::string& entityId, const Json::Value& parameters = Json::Value());
-    bool turnOff(const std::string& entityId);
-    bool toggle(const std::string& entityId);
-    bool setTemperature(const std::string& entityId, float temperature);
+    virtual bool turnOn(const std::string& entityId, const Json::Value& parameters = Json::Value());
+    virtual bool turnOff(const std::string& entityId);
+    virtual bool toggle(const std::string& entityId);
+    virtual bool setTemperature(const std::string& entityId, float temperature);
 
 private:
     std::string makeRequest(const std::string& endpoint, const std::string& method = "GET",

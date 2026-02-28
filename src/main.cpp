@@ -3,7 +3,6 @@
 #include "clients/OllamaClient.h"
 #include "services/DatabaseService.h"
 #include "services/VectorSearchService.h"
-#include "services/EntityIngestService.h"
 #include "intent/DeterministicClassifier.h"
 #include "intent/EmbeddingClassifier.h"
 #include "intent/LLMClassifier.h"
@@ -14,11 +13,8 @@
 #include <memory>
 #include <cstdlib>
 
-static std::shared_ptr<EntityIngestService> g_ingest;
-
 void signalHandler(int signal) {
     std::cout << "\n[Main] Signal " << signal << " received, shutting down..." << std::endl;
-    if (g_ingest) g_ingest->stop();
     drogon::app().quit();
 }
 
@@ -57,13 +53,8 @@ int main(int argc, char* argv[]) {
     // --- Vector search ---
     auto vectorSearch = std::make_shared<VectorSearchService>(cfg.dbConnectionString());
 
-    // --- Entity ingest (startup sync + hourly background) ---
-    g_ingest = std::make_shared<EntityIngestService>(
-        haClient, ollamaClient, vectorSearch,
-        cfg.ollama.embed_model,
-        cfg.haDbConnectionString()  // Direct HA DB query, falls back to REST API
-    );
-    g_ingest->startBackgroundSync();
+    // Entity sync is handled externally by hms-assist-sync (tools/hms_assist_sync.py).
+    // The API is read-only against the vector DB.
 
     // --- Classifiers ---
     auto tier1 = std::make_shared<DeterministicClassifier>(haClient);
@@ -84,7 +75,7 @@ int main(int argc, char* argv[]) {
 
     // --- Controller ---
     auto controller = std::make_shared<CommandController>(
-        tier1, tier2, tier3, dbService, g_ingest
+        tier1, tier2, tier3, dbService
     );
 
     // --- HTTP routes ---

@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS entity_embeddings (
     friendly_name   TEXT,
     state           TEXT,
     attributes_json JSONB,
+    description     TEXT,   -- the text that was embedded (useful for debugging)
     embedding       vector(768),
     last_updated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

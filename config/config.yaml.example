@@ -1,33 +1,30 @@
 homeassistant:
-  url: http://192.168.2.7:8123
-  token: YOUR_HA_LONG_LIVED_TOKEN
+  url: http://192.168.2.7:8123          # Your HA instance URL
+  token: YOUR_LONG_LIVED_TOKEN_HERE     # Settings → Long-lived access tokens
 
 database:
-  host: 192.168.2.15
+  host: localhost
   port: 5432
   name: hms_assist
   user: maestro
   password: YOUR_DB_PASSWORD
-  # Direct connection to the HA recorder DB for fast entity ingestion
-  ha_db_name: homeassistant
+  ha_db_name: homeassistant             # HA recorder DB (for fast entity sync)
+                                        # Leave empty to use REST API instead
 
 ollama:
-  url: http://192.168.2.5:11434
-  embed_model: nomic-embed-text
-  fast_model: llama3.1:8b-instruct-q4_K_M
-  smart_model: gpt-oss:120b-cloud
-  # Confidence threshold below which 8b escalates to smart_model
-  escalation_threshold: 0.7
+  url: http://192.168.2.5:11434         # Ollama server URL
+  embed_model: nomic-embed-text         # Embedding model (768-dim)
+  fast_model: llama3.1:8b-instruct-q4_K_M   # Tier 3a: fast LLM
+  smart_model: llama3.1:70b-instruct-q4_K_M # Tier 3b: fallback LLM
+  escalation_threshold: 0.7             # Confidence below which tier3a escalates
 
 wyoming:
-  piper_host: 192.168.2.5
+  piper_host: 192.168.2.5              # Wyoming Piper TTS host
   piper_port: 10200
-  whisper_host: 192.168.2.5
+  whisper_host: 192.168.2.5           # Wyoming Whisper STT host
   whisper_port: 10300
 
 service:
   port: 8894
-  # Minimum cosine similarity for Tier 2 vector search match
-  vector_similarity_threshold: 0.82
-  # How many vector search results to consider
-  vector_search_limit: 5
+  vector_similarity_threshold: 0.58   # Minimum cosine similarity for tier2 match
+  vector_search_limit: 5              # Max candidates returned by pgvector

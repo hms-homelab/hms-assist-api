@@ -37,3 +37,43 @@ target_link_libraries(${PROJECT_NAME}
 )
 
 install(TARGETS ${PROJECT_NAME} DESTINATION /usr/local/bin)
+
+# ─── Unit Tests ───────────────────────────────────────────────────────────────
+
+enable_testing()
+find_package(GTest REQUIRED)
+
+# All sources except main.cpp (which defines main())
+file(GLOB_RECURSE SOURCES_NO_MAIN "src/*.cpp")
+list(REMOVE_ITEM SOURCES_NO_MAIN "${CMAKE_SOURCE_DIR}/src/main.cpp")
+
+file(GLOB TEST_SOURCES "tests/unit/*.cpp")
+
+add_executable(hms_assist_tests
+    ${SOURCES_NO_MAIN}
+    ${TEST_SOURCES}
+)
+
+target_include_directories(hms_assist_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CURL_INCLUDE_DIRS}
+    ${YAML_CPP_INCLUDE_DIR}
+    ${GTEST_INCLUDE_DIRS}
+)
+
+target_link_libraries(hms_assist_tests
+    GTest::gtest_main
+    GTest::gmock
+    Drogon::Drogon
+    jsoncpp_lib
+    ${PQXX_LIB}
+    ${PQ_LIB}
+    ${CURL_LIBRARIES}
+    yaml-cpp
+    pthread
+    ssl
+    crypto
+)
+
+include(GoogleTest)
+gtest_discover_tests(hms_assist_tests)

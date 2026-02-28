@@ -159,10 +159,11 @@ bool HomeAssistantClient::callService(const std::string& domain, const std::stri
     std::string endpoint = "/api/services/" + domain + "/" + service;
     std::string response = makeRequest(endpoint, "POST", postData);
 
-    // Check if response is valid JSON array (success)
+    // HA returns a JSON array of changed states on success.
+    // An empty array [] is still a valid response (e.g., turn_on a light that is already on).
     Json::Reader reader;
     Json::Value root;
-    bool success = reader.parse(response, root) && root.isArray() && root.size() > 0;
+    bool success = reader.parse(response, root) && root.isArray();
 
     if (success) {
         std::cout << "[HA Client] Service call successful: " << domain << "." << service

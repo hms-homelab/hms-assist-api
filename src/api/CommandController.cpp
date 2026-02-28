@@ -2,12 +2,11 @@
 #include <iostream>
 #include <chrono>
 
-CommandController::CommandController(std::shared_ptr<DeterministicClassifier> tier1,
-                                     std::shared_ptr<EmbeddingClassifier> tier2,
-                                     std::shared_ptr<LLMClassifier> tier3,
-                                     std::shared_ptr<DatabaseService> db,
-                                     std::shared_ptr<EntityIngestService> ingest)
-    : tier1_(tier1), tier2_(tier2), tier3_(tier3), db_(db), ingest_(ingest) {}
+CommandController::CommandController(std::shared_ptr<IntentClassifier> tier1,
+                                     std::shared_ptr<IntentClassifier> tier2,
+                                     std::shared_ptr<IntentClassifier> tier3,
+                                     std::shared_ptr<DatabaseService> db)
+    : tier1_(tier1), tier2_(tier2), tier3_(tier3), db_(db) {}
 
 void CommandController::handleCommand(const drogon::HttpRequestPtr& req,
                                        std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
@@ -61,19 +60,23 @@ void CommandController::handleCommand(const drogon::HttpRequestPtr& req,
 
 void CommandController::handleReindex(const drogon::HttpRequestPtr& req,
                                        std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
-    std::cout << "[CommandController] Manual re-index triggered" << std::endl;
+    std::cout << "[CommandController] Manual re-index triggered — shelling out to hms-assist-sync" << std::endl;
 
-    int count = 0;
-    try {
-        count = ingest_->ingest();
-    } catch (const std::exception& e) {
-        cb(errorResponse(500, std::string("Reindex failed: ") + e.what()));
-        return;
-    }
+    // Run the Python sync tool as a background process (non-blocking).
+    // Uses the same config file the API is running with.
+    const char* configEnv = std::getenv("HMS_ASSIST_CONFIG");
+    std::string configPath = configEnv ? configEnv : "/etc/hms-assist/config.yaml";
+
+    std::string syncScript =
+        "/home/aamat/maestro_hub/projects/hms-assist/tools/venv/bin/python "
+        "/home/aamat/maestro_hub/projects/hms-assist/tools/hms_assist_sync.py "
+        "--config " + configPath + " --once > /tmp/hms_assist_sync.log 2>&1 &";
+
+    int ret = std::system(syncScript.c_str());
 
     Json::Value resp;
-    resp["success"]            = true;
-    resp["entities_indexed"]   = count;
+    resp["success"] = (ret == 0);
+    resp["message"] = "Sync started in background — tail /tmp/hms_assist_sync.log";
     cb(drogon::HttpResponse::newHttpJsonResponse(resp));
 }
 

@@ -32,3 +32,8 @@ logs/
 
 # macOS
 .DS_Store
+__pycache__/
+*.pyc
+*.pyo
+tools/venv/
+build/

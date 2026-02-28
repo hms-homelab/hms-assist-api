@@ -1,12 +1,11 @@
 [Unit]
 Description=HMS-Assist Voice Assistant API v2
-After=network.target postgresql.service
+After=network.target postgresql.service hms-assist-sync.service
 Wants=network.target
 
 [Service]
 Type=simple
 User=aamat
-WorkingDirectory=/home/aamat/maestro_hub/projects/hms-assist/build
 ExecStart=/usr/local/bin/hms_assist
 Environment="HMS_ASSIST_CONFIG=/etc/hms-assist/config.yaml"
 

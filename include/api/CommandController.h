@@ -5,7 +5,6 @@
 #include "intent/EmbeddingClassifier.h"
 #include "intent/LLMClassifier.h"
 #include "services/DatabaseService.h"
-#include "services/EntityIngestService.h"
 #include <memory>
 #include <drogon/drogon.h>
 
@@ -13,11 +12,11 @@
 // POST /api/v1/command → Tier1 → Tier2 → Tier3a → Tier3b → HA → response
 class CommandController {
 public:
-    CommandController(std::shared_ptr<DeterministicClassifier> tier1,
-                      std::shared_ptr<EmbeddingClassifier> tier2,
-                      std::shared_ptr<LLMClassifier> tier3,
-                      std::shared_ptr<DatabaseService> db,
-                      std::shared_ptr<EntityIngestService> ingest);
+    // Tiers are accepted as the base IntentClassifier so test doubles can be injected.
+    CommandController(std::shared_ptr<IntentClassifier> tier1,
+                      std::shared_ptr<IntentClassifier> tier2,
+                      std::shared_ptr<IntentClassifier> tier3,
+                      std::shared_ptr<DatabaseService> db);
 
     // POST /api/v1/command
     // Body: { text, device_id, confidence, context? }
@@ -29,11 +28,10 @@ public:
                        std::function<void(const drogon::HttpResponsePtr&)>&& cb);
 
 private:
-    std::shared_ptr<DeterministicClassifier> tier1_;
-    std::shared_ptr<EmbeddingClassifier>     tier2_;
-    std::shared_ptr<LLMClassifier>           tier3_;
-    std::shared_ptr<DatabaseService>         db_;
-    std::shared_ptr<EntityIngestService>     ingest_;
+    std::shared_ptr<IntentClassifier> tier1_;
+    std::shared_ptr<IntentClassifier> tier2_;
+    std::shared_ptr<IntentClassifier> tier3_;
+    std::shared_ptr<DatabaseService>  db_;
 
     IntentResult runPipeline(const VoiceCommand& command);
     static drogon::HttpResponsePtr errorResponse(int status, const std::string& message);

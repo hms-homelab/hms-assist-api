@@ -16,11 +16,13 @@ EmbeddingClassifier::EmbeddingClassifier(std::shared_ptr<OllamaClient> ollama,
 IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
     auto start = std::chrono::steady_clock::now();
     IntentResult result;
-    result.tier = "embedding";
+    result.tier = "tier2";
 
     try {
-        // Embed the command text
-        std::vector<float> queryVec = ollama_->embed(command.text, embedModel_);
+        // Embed the command text with asymmetric retrieval prefix so that
+        // nomic-embed-text aligns query space with the document space used
+        // during indexing (search_document: prefix in hms_assist_sync.py).
+        std::vector<float> queryVec = ollama_->embed("search_query: " + command.text, embedModel_);
 
         // Search vector DB
         std::vector<EntityMatch> matches = vectorSearch_->search(queryVec, threshold_, limit_);

@@ -1,320 +1,358 @@
-# HMS-Assist Voice Assistant System
+# hms-assist-api
 
-**100% local voice assistant with 3-tier intent classification**
+**100% local voice assistant API with 3-tier intent classification and Home Assistant integration.**
 
-## Overview
+Part of the [maestro-hub](https://github.com/hms-homelab) home automation platform.
 
-HMS-Assist is a complete voice assistant system combining ESP32-S3 firmware with a C++ backend service for intelligent intent classification and Home Assistant integration.
+---
 
-### Architecture
+## What It Does
+
+Accepts a natural-language voice command (text) via HTTP POST, classifies intent through a 3-tier pipeline, executes the corresponding Home Assistant action, and returns a structured result — all locally, no cloud required.
 
 ```
-ESP32-S3 Voice Assistant (hms-assist-voice)
-  ├─ I2S Microphone (INMP441 dual-channel)
-  ├─ ESP-SR Wake Word Engine (custom TFLite model)
-  ├─ MQTT Client → EMQX (192.168.2.15:1883)
-  └─ I2S Speaker (MAX98357A)
-      ↓ MQTT
-HMS-Assist C++ Service (systemd)
-  ├─ Tier 1: Deterministic (regex, 70-80%, <5ms)
-  ├─ Tier 2: Embeddings (semantic, 15-20%, ~20ms) [Future]
-  ├─ Tier 3: LLM (Ollama llama3.1:8b, 5-10%, 500-1500ms) [Future]
-  ├─ Home Assistant API Client
-  ├─ PostgreSQL (intent history)
-  └─ MQTT Discovery (sensors)
-      ↓ HTTP
-Wyoming Services (192.168.2.5)
-  ├─ Whisper STT (port 10300)
-  └─ Piper TTS (port 10200)
+POST /api/v1/command
+{"text": "can you brighten up the sala", "device_id": "satellite_1"}
+
+→ {"tier": "tier2", "intent": "light_turn_on", "confidence": 0.65,
+   "response_text": "Turned on the Sala 1.", "success": true, ...}
 ```
 
-## Components
+## Architecture
 
-### 1. ESP32-S3 Firmware (hms-assist-voice/)
+```
+Voice Command (HTTP POST)
+        │
+        ▼
+┌──────────────────────────────────────────────────────┐
+│               3-Tier Classification Pipeline          │
+│                                                      │
+│  Tier 1 — DeterministicClassifier        <5ms, ~70%  │
+│  ├─ 16 regex patterns                               │
+│  └─ Exact entity match via HA REST API              │
+│                                                      │
+│  Tier 2 — EmbeddingClassifier          ~300ms, ~20%  │
+│  ├─ nomic-embed-text (768-dim, search_query prefix) │
+│  ├─ pgvector cosine search (1115 entities, HNSW)    │
+│  └─ Action inferred from command text               │
+│                                                      │
+│  Tier 3 — LLMClassifier              1–30s, ~10%    │
+│  ├─ Tier 3a: llama3.1:8b (fast)                    │
+│  └─ Tier 3b: 120b cloud model (smart fallback)     │
+│                                                      │
+└──────────────────────────────────────────────────────┘
+        │
+        ▼
+  Home Assistant REST API  →  PostgreSQL logging
+```
 
-**Hardware:** ReSpeaker Lite (ESP32-S3 with XMOS audio interface)
+## Supported Commands
 
-**Features:**
-- Custom wake word detection ("hey glitchee", "ok glitchee")
-- Dual-channel I2S audio (16kHz, 32-bit stereo)
-- Wyoming STT/TTS integration
-- MQTT communication
-- Voice activity detection (VAD)
+### Tier 1 — Regex patterns (deterministic, always <5ms)
 
-**Files:**
-- `main/main.c` - Entry point
-- `main/voice_task.c` - State machine (idle → wake → recording → STT → intent → TTS)
-- `main/audio/` - I2S config, wake word detection
-- `main/network/` - WiFi, MQTT, Wyoming clients
+| Intent | Example phrases |
+|--------|----------------|
+| Light on/off/toggle | "turn on the kitchen light", "switch off sala 2", "toggle hallway" |
+| Thermostat set | "set the living room thermostat to 72" |
+| Thermostat warmer/cooler | "make it warmer", "make it cooler" |
+| Lock/unlock | "lock the front door", "unlock the entryway" |
+| Media pause | "pause the music", "pause playback" |
+| Media next/prev | "skip to the next song", "previous track" |
+| Media play | "play music", "resume playback" |
+| Scene activate | "activate movie night scene" |
+| Scene mode | "set night mode" |
 
-### 2. HMS-Assist C++ Service (hms-assist/)
+### Tier 2 — Vector search (semantic paraphrases, ~300ms)
 
-**Features:**
-- 3-tier intent classification (MVP: Tier 1 deterministic only)
-- Home Assistant API integration
-- PostgreSQL logging
-- Health check HTTP endpoint (:8894)
+Any phrasing that references a known HA entity by name, even colloquially:
 
-**Files:**
-- `src/main.cpp` - Service entry point
-- `src/intent/DeterministicClassifier.cpp` - Regex-based intent matching
-- `src/clients/HomeAssistantClient.cpp` - HA REST API client
-- `src/services/VoiceService.cpp` - MQTT orchestrator
+- "can you brighten up the sala" → `light.sala_1`
+- "sala lights on" → `light.sala_1`
+- "dim the sala" → `light.sala_1`
 
-## Build & Deploy
+1115 entities indexed with `nomic-embed-text` + voice command examples. Threshold: 0.58 cosine similarity.
+
+### Tier 3 — LLM (complex / ambiguous, 1–30s)
+
+Open-ended requests that don't match any pattern or entity name:
+
+- "make the living room cozy"
+- "I'm heading to bed"
+
+## Quick Start
 
 ### Prerequisites
 
 ```bash
-# Install dependencies
-sudo apt update
-sudo apt install -y cmake g++ libdrogon-dev libjsoncpp-dev \
-                    libpaho-mqttpp-dev libpqxx-dev libcurl4-openssl-dev \
-                    postgresql-client
+# C++ dependencies
+sudo apt install cmake g++ libdrogon-dev libjsoncpp-dev \
+    libpqxx-dev libcurl4-openssl-dev libyaml-cpp-dev \
+    libgtest-dev libgmock-dev postgresql-client python3 python3-venv
 
-# ESP-IDF (for ESP32-S3 firmware)
-# Follow: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/get-started/
+# PostgreSQL: database hms_assist must exist
+# Ollama: nomic-embed-text + llama3.1:8b must be pulled on your Ollama server
 ```
 
-### HMS-Assist C++ Service
+### Install
 
 ```bash
-# 1. Create PostgreSQL database
-psql -h localhost -U maestro -d postgres -f init_database.sql
-# Password: maestro_postgres_2026_secure
+git clone https://github.com/hms-homelab/hms-assist-api.git
+cd hms-assist-api
 
-# 2. Build service
-cd /home/aamat/maestro_hub/hms-assist
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+# Copy and edit config
+sudo mkdir -p /etc/hms-assist
+sudo cp config/config.yaml.example /etc/hms-assist/config.yaml
+sudo nano /etc/hms-assist/config.yaml   # fill in HA token, DB password, Ollama URL
 
-# 3. Test service
-./hms_assist
+# Build, test, and install
+./build_and_install.sh
+```
 
-# 4. Install systemd service
-sudo cp ../hms-assist.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable hms-assist
-sudo systemctl start hms-assist
+`build_and_install.sh` will:
+1. Initialize the PostgreSQL schema
+2. Build the C++ binary and run all unit tests
+3. Install `/usr/local/bin/hms_assist`
+4. Set up the Python entity-sync venv
+5. Register and start both systemd services
 
-# 5. Check status
+### Verify
+
+```bash
+curl http://localhost:8894/health
+# → {"status":"healthy","components":{"entity_count":1115,...}}
+
+curl -X POST http://localhost:8894/api/v1/command \
+  -H "Content-Type: application/json" \
+  -d '{"text": "turn on the patio light", "device_id": "test"}'
+# → {"tier":"tier1","intent":"light_control","confidence":0.95,...}
+```
+
+## Services
+
+| Service | Unit | Description |
+|---------|------|-------------|
+| API | `hms-assist.service` | C++ HTTP server on port 8894 |
+| Sync | `hms-assist-sync.service` | Python entity indexer (runs every 60 min) |
+
+```bash
+# API
 sudo systemctl status hms-assist
 sudo journalctl -u hms-assist -f
 
-# 6. Health check
-curl http://localhost:8894/health
+# Entity sync
+sudo systemctl status hms-assist-sync
+sudo journalctl -u hms-assist-sync -f
+
+# Manual re-index via API
+curl -X POST http://localhost:8894/admin/reindex
 ```
 
-### ESP32-S3 Firmware
+## API Reference
 
-```bash
-# 1. Set up ESP-IDF environment
-cd /home/aamat/maestro_hub/hms-assist-voice
-. ~/esp/esp-idf/export.sh
+### `GET /health`
 
-# 2. Configure project
-idf.py set-target esp32s3
-idf.py menuconfig
-# Configure WiFi SSID/password if needed
+```json
+{
+  "status": "healthy",
+  "service": "hms-assist",
+  "version": "2.0.0",
+  "components": {
+    "database": "connected",
+    "vector_db": "connected",
+    "entity_count": 1115
+  },
+  "statistics": {
+    "total_commands": 42,
+    "successful_intents": 39
+  }
+}
+```
 
-# 3. Build firmware
-idf.py build
+### `POST /api/v1/command`
 
-# 4. Flash to ESP32-S3
-idf.py -p /dev/ttyUSB0 flash
+**Request:**
+```json
+{
+  "text": "turn on the patio light",
+  "device_id": "satellite_1",
+  "confidence": 1.0
+}
+```
 
-# 5. Monitor logs
-idf.py -p /dev/ttyUSB0 monitor
+**Response (success):**
+```json
+{
+  "success": true,
+  "tier": "tier1",
+  "intent": "light_control",
+  "confidence": 0.95,
+  "response_text": "Turned on the Patio Light.",
+  "processing_time_ms": 3,
+  "entities": {
+    "entity_id": "light.patio",
+    "domain": "light",
+    "friendly_name": "Patio Light",
+    "action": "turn_on",
+    "state": "on"
+  }
+}
+```
+
+**Response (no match):**
+```json
+{
+  "success": false,
+  "tier": "tier3b",
+  "intent": "",
+  "confidence": 0.0,
+  "response_text": "I'm not sure how to help with that.",
+  "processing_time_ms": 8420
+}
+```
+
+HTTP status: `200` on success, `400` on bad request, `422` if all tiers fail.
+
+### `POST /admin/reindex`
+
+Triggers a background entity re-sync from Home Assistant. Returns immediately.
+
+```json
+{"success": true, "message": "Sync started — tail /tmp/hms_assist_sync.log"}
 ```
 
 ## Configuration
 
-### Environment Variables (HMS-Assist Service)
+Config file: `/etc/hms-assist/config.yaml`
+
+```yaml
+homeassistant:
+  url: http://192.168.2.7:8123
+  token: <long-lived token>
+
+database:
+  host: localhost
+  port: 5432
+  name: hms_assist
+  user: maestro
+  password: <password>
+  ha_db_name: homeassistant    # optional: direct HA recorder DB for faster sync
+
+ollama:
+  url: http://192.168.2.5:11434
+  embed_model: nomic-embed-text
+  fast_model: llama3.1:8b-instruct-q4_K_M
+  smart_model: llama3.1:70b-instruct-q4_K_M
+  escalation_threshold: 0.7
+
+wyoming:
+  piper_host: 192.168.2.5
+  piper_port: 10200
+  whisper_host: 192.168.2.5
+  whisper_port: 10300
+
+service:
+  port: 8894
+  vector_similarity_threshold: 0.58
+  vector_search_limit: 5
+```
+
+## Entity Sync
+
+The sync tool (`tools/hms_assist_sync.py`) populates pgvector with HA entity embeddings:
+
+- Fetches entities from the HA recorder DB (fast) or REST API (fallback)
+- Builds a rich description for each entity including voice command examples
+- Embeds with `nomic-embed-text` using `search_document:` asymmetric prefix
+- Upserts into `entity_embeddings` table (768-dim HNSW index)
+- Prunes stale entities no longer in HA
 
 ```bash
-MQTT_BROKER=192.168.2.15
-MQTT_PORT=1883
-MQTT_USER=aamat
-MQTT_PASS=exploracion
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=hms_assist
-DB_USER=maestro
-DB_PASS=maestro_postgres_2026_secure
-HA_URL=http://192.168.2.15:8123
-HA_TOKEN=<your_token>
-HEALTH_CHECK_PORT=8894
-```
+# Manual one-shot sync
+HMS_ASSIST_CONFIG=/etc/hms-assist/config.yaml \
+  tools/venv/bin/python tools/hms_assist_sync.py --once
 
-### Wake Word Models
-
-Pre-trained TFLite models are located at:
+# Dry-run (shows descriptions, no DB writes)
+HMS_ASSIST_CONFIG=/etc/hms-assist/config.yaml \
+  tools/venv/bin/python tools/hms_assist_sync.py --dry-run
 ```
-/home/aamat/m5stack/artifacts/wake-word-models/
-  ├─ hey_glitchee.tflite
-  └─ Ok_Glichy.tflite
-```
-
-Copy to ESP32-S3 SPIFFS partition during build.
 
 ## Testing
 
-### Test MQTT Communication
-
 ```bash
-# Subscribe to all HMS-Assist topics
-mosquitto_sub -h 192.168.2.15 -t 'hms_assist/#' -u aamat -P exploracion -v
+# C++ unit tests (no network/DB required)
+cd build && ./hms_assist_tests
 
-# Publish test STT result
-mosquitto_pub -h 192.168.2.15 -t 'hms_assist/voice/test_device/stt_result' \
-  -u aamat -P exploracion \
-  -m '{"text": "turn on kitchen light", "confidence": 0.95}'
+# Python sync unit tests
+tools/venv/bin/python -m pytest tools/tests/ -v
 
-# Check intent result
-# Should see: hms_assist/voice/test_device/intent_result
+# Sync e2e tests (requires Ollama + PostgreSQL)
+HMS_ASSIST_CONFIG=/etc/hms-assist/config.yaml \
+  tools/venv/bin/python -m pytest tests/e2e/test_sync_e2e.py -v -k "not FullSync"
+
+# API e2e tests (requires running API on port 8894)
+HMS_ASSIST_CONFIG=/etc/hms-assist/config.yaml \
+  tools/venv/bin/python -m pytest tests/e2e/test_api_e2e.py -v
 ```
 
-### Test Home Assistant Integration
+**Test counts:** 59 C++ unit · 30 Python sync unit · 16 sync e2e · 23 API e2e = **128 total**
 
-```bash
-# Check HA entities
-curl -s -H "Authorization: Bearer <token>" \
-  http://192.168.2.15:8123/api/states | python3 -m json.tool
+## Project Structure
 
-# Turn on light manually
-curl -X POST -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{"entity_id": "light.kitchen"}' \
-  http://192.168.2.15:8123/api/services/light/turn_on
+```
+hms-assist-api/
+├── CMakeLists.txt
+├── hms-assist.service            # API systemd unit
+├── build_and_install.sh          # Build + install script
+├── init_database.sql             # PostgreSQL schema
+├── config/
+│   └── config.yaml.example       # Config template
+├── include/
+│   ├── api/CommandController.h
+│   ├── clients/HomeAssistantClient.h
+│   ├── intent/
+│   │   ├── IntentClassifier.h    # Abstract base class
+│   │   ├── DeterministicClassifier.h
+│   │   ├── EmbeddingClassifier.h
+│   │   └── LLMClassifier.h
+│   ├── services/
+│   │   ├── DatabaseService.h
+│   │   ├── OllamaClient.h
+│   │   └── VectorSearchService.h
+│   └── utils/ConfigManager.h
+├── src/
+│   ├── main.cpp
+│   ├── api/CommandController.cpp
+│   ├── clients/HomeAssistantClient.cpp
+│   ├── intent/{Deterministic,Embedding,LLM}Classifier.cpp
+│   └── services/{Database,Ollama,VectorSearch}Service.cpp
+├── tools/
+│   ├── hms_assist_sync.py        # Entity indexer
+│   ├── hms-assist-sync.service   # Sync systemd unit
+│   ├── requirements.txt
+│   └── tests/                    # Python unit tests
+└── tests/
+    ├── unit/                     # C++ unit tests (GoogleTest + GMock)
+    └── e2e/                      # Python e2e tests (pytest)
 ```
 
-### Test Database
+## Performance
 
-```bash
-# Connect to database
-psql -h localhost -U maestro -d hms_assist
+| Scenario | Tier | Latency |
+|----------|------|---------|
+| "turn on the patio light" | tier1 | ~3ms |
+| "sala lights on" | tier2 | ~300ms |
+| "can you brighten up the sala" | tier2 | ~300ms |
+| "make the living room cozy" | tier3a | ~5–15s |
+| Complex multi-entity request | tier3b | ~20–40s |
 
-# View statistics
-SELECT * FROM command_statistics;
-SELECT * FROM intent_distribution;
-SELECT * FROM device_activity;
+## Stack
 
-# View recent commands
-SELECT * FROM voice_commands ORDER BY timestamp DESC LIMIT 10;
-```
-
-## Supported Commands (Tier 1 Deterministic)
-
-### Light Control
-- "turn on [location] light"
-- "turn off [location] light"
-- "toggle [location] light"
-
-### Thermostat
-- "set [location] thermostat to [temperature]"
-- "make it warmer/cooler"
-
-### Locks
-- "lock [location] door"
-- "unlock [location] door"
-
-### Media
-- "pause music"
-- "skip to next song"
-- "previous track"
-
-### Scenes
-- "activate [scene name] scene"
-- "set [mode name] mode"
-
-## Performance Metrics
-
-| Metric | Target | Current (MVP) |
-|--------|--------|---------------|
-| Wake Word Detection | <200ms | ~150ms |
-| STT Latency | <500ms | ~400ms |
-| Tier 1 Classification | <5ms | ~2ms |
-| TTS Latency | <300ms | ~250ms |
-| **End-to-End (Simple)** | **<1.5s** | **~1.2s** |
-
-## Troubleshooting
-
-### ESP32-S3 Not Connecting to WiFi
-
-Check SSID/password in `config.h`:
-```c
-#define WIFI_SSID "scorpio"
-#define WIFI_PASSWORD "sabrina1111"
-```
-
-### MQTT Connection Failed
-
-Verify broker is running:
-```bash
-sudo systemctl status emqx
-mosquitto_sub -h 192.168.2.15 -t 'test' -u aamat -P exploracion
-```
-
-### PostgreSQL Connection Failed
-
-Check database exists:
-```bash
-psql -h localhost -U maestro -l
-```
-
-### Home Assistant API Not Responding
-
-Verify token and URL:
-```bash
-curl -H "Authorization: Bearer <token>" http://192.168.2.15:8123/api/
-```
-
-### Intent Classification Not Working
-
-Check logs:
-```bash
-sudo journalctl -u hms-assist -f
-```
-
-View recent commands:
-```sql
-SELECT vc.command_text, ir.intent, ir.success, ir.response_text
-FROM voice_commands vc
-LEFT JOIN intent_results ir ON vc.id = ir.command_id
-ORDER BY vc.timestamp DESC LIMIT 10;
-```
-
-## Future Enhancements (Phase 4-5)
-
-### Tier 2: Embeddings Classifier
-- ONNX Runtime integration
-- all-MiniLM-L6-v2 sentence transformer
-- Semantic similarity matching (~20ms)
-
-### Tier 3: LLM Classifier
-- Ollama integration (llama3.1:8b)
-- Multi-intent parsing
-- Context-aware responses (500-1500ms)
-
-### MQTT Discovery
-- Home Assistant sensor integration
-- Real-time metrics
-- Performance monitoring
-
-## Documentation
-
-- `CLAUDE.md` - Full project documentation
-- `HOME_LAB_RATING.md` - Phase 19 implementation details
-- Plan file: Implementation plan with complete architecture
+- **C++ API:** Drogon HTTP, libpqxx, libcurl, jsoncpp, yaml-cpp
+- **pgvector:** PostgreSQL 17 extension, 768-dim HNSW cosine index
+- **Embeddings:** nomic-embed-text via Ollama (asymmetric search_query/search_document prefixes)
+- **LLM:** llama3.1:8b-instruct-q4_K_M (tier3a) + cloud model (tier3b) via Ollama
+- **Python sync:** psycopg2, requests, PyYAML
 
 ## License
 
 MIT
-
-## Credits
-
-- **Maestro Hub Team**
-- Wyoming Protocol: https://github.com/rhasspy/wyoming
-- ESP-IDF: https://github.com/espressif/esp-idf
-- Drogon Framework: https://github.com/drogonframework/drogon

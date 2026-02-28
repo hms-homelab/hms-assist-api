@@ -1,0 +1,23 @@
+[Unit]
+Description=HMS-Assist Entity Sync (pgvector indexer)
+After=network.target postgresql.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=aamat
+ExecStart=/home/aamat/maestro_hub/projects/hms-assist/tools/venv/bin/python \
+    /home/aamat/maestro_hub/projects/hms-assist/tools/hms_assist_sync.py \
+    --config /etc/hms-assist/config.yaml \
+    --interval 3600
+Environment="HMS_ASSIST_CONFIG=/etc/hms-assist/config.yaml"
+
+Restart=on-failure
+RestartSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hms-assist-sync
+
+[Install]
+WantedBy=multi-user.target
