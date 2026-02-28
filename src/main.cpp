@@ -1,129 +1,147 @@
 #include "utils/ConfigManager.h"
-#include "clients/MqttClient.h"
 #include "clients/HomeAssistantClient.h"
+#include "clients/OllamaClient.h"
 #include "services/DatabaseService.h"
-#include "services/VoiceService.h"
+#include "services/VectorSearchService.h"
+#include "services/EntityIngestService.h"
+#include "intent/DeterministicClassifier.h"
+#include "intent/EmbeddingClassifier.h"
+#include "intent/LLMClassifier.h"
+#include "api/CommandController.h"
 #include <drogon/drogon.h>
 #include <iostream>
 #include <csignal>
 #include <memory>
+#include <cstdlib>
 
-static std::shared_ptr<VoiceService> voiceService;
+static std::shared_ptr<EntityIngestService> g_ingest;
 
 void signalHandler(int signal) {
-    std::cout << "\n[Main] Received signal " << signal << ", shutting down..." << std::endl;
-
-    if (voiceService) {
-        voiceService->stop();
-    }
-
+    std::cout << "\n[Main] Signal " << signal << " received, shutting down..." << std::endl;
+    if (g_ingest) g_ingest->stop();
     drogon::app().quit();
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     std::cout << "==========================================" << std::endl;
-    std::cout << "HMS-Assist Voice Assistant Service" << std::endl;
+    std::cout << " HMS-Assist Voice Assistant API v2.0"       << std::endl;
     std::cout << "==========================================" << std::endl;
 
-    // Register signal handlers
-    std::signal(SIGINT, signalHandler);
+    // Config path: env var > default
+    const char* configEnv = std::getenv("HMS_ASSIST_CONFIG");
+    std::string configPath = configEnv ? configEnv : "/etc/hms-assist/config.yaml";
+
+    try {
+        ConfigManager::instance().load(configPath);
+    } catch (const std::exception& e) {
+        std::cerr << "[Main] FATAL: " << e.what() << std::endl;
+        return 1;
+    }
+
+    auto& cfg = ConfigManager::instance();
+
+    std::signal(SIGINT,  signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    // Load configuration
-    std::string mqttBroker = ConfigManager::getMqttBroker();
-    int mqttPort = ConfigManager::getMqttPort();
-    std::string mqttUser = ConfigManager::getMqttUser();
-    std::string mqttPassword = ConfigManager::getMqttPassword();
+    // --- Clients ---
+    auto haClient = std::make_shared<HomeAssistantClient>(cfg.ha.url, cfg.ha.token);
+    auto ollamaClient = std::make_shared<OllamaClient>(cfg.ollama.url);
 
-    std::string haUrl = ConfigManager::getHaUrl();
-    std::string haToken = ConfigManager::getHaToken();
-
-    std::string dbHost = ConfigManager::getDbHost();
-    int dbPort = ConfigManager::getDbPort();
-    std::string dbName = ConfigManager::getDbName();
-    std::string dbUser = ConfigManager::getDbUser();
-    std::string dbPassword = ConfigManager::getDbPassword();
-
-    int healthCheckPort = ConfigManager::getHealthCheckPort();
-
-    std::cout << "[Main] Configuration loaded:" << std::endl;
-    std::cout << "  MQTT Broker: " << mqttBroker << ":" << mqttPort << std::endl;
-    std::cout << "  Home Assistant: " << haUrl << std::endl;
-    std::cout << "  Database: " << dbHost << ":" << dbPort << "/" << dbName << std::endl;
-    std::cout << "  Health Check Port: " << healthCheckPort << std::endl;
-
-    // Initialize Home Assistant client
-    std::cout << "\n[Main] Initializing Home Assistant client..." << std::endl;
-    auto haClient = std::make_shared<HomeAssistantClient>(haUrl, haToken);
-
-    // Initialize database service
-    std::cout << "[Main] Connecting to PostgreSQL database..." << std::endl;
-    std::string dbConnectionString = "host=" + dbHost +
-                                    " port=" + std::to_string(dbPort) +
-                                    " dbname=" + dbName +
-                                    " user=" + dbUser +
-                                    " password=" + dbPassword;
-
-    auto dbService = std::make_shared<DatabaseService>(dbConnectionString);
-
+    // --- Database ---
+    auto dbService = std::make_shared<DatabaseService>(cfg.dbConnectionString());
     if (!dbService->connect()) {
-        std::cerr << "[Main] Failed to connect to database, exiting" << std::endl;
+        std::cerr << "[Main] FATAL: Cannot connect to database" << std::endl;
         return 1;
     }
 
-    // Initialize MQTT client
-    std::cout << "[Main] Connecting to MQTT broker..." << std::endl;
-    auto mqttClient = std::make_shared<MqttClient>(
-        mqttBroker, mqttPort, "hms_assist_service", mqttUser, mqttPassword
+    // --- Vector search ---
+    auto vectorSearch = std::make_shared<VectorSearchService>(cfg.dbConnectionString());
+
+    // --- Entity ingest (startup sync + hourly background) ---
+    g_ingest = std::make_shared<EntityIngestService>(
+        haClient, ollamaClient, vectorSearch,
+        cfg.ollama.embed_model,
+        cfg.haDbConnectionString()  // Direct HA DB query, falls back to REST API
+    );
+    g_ingest->startBackgroundSync();
+
+    // --- Classifiers ---
+    auto tier1 = std::make_shared<DeterministicClassifier>(haClient);
+
+    auto tier2 = std::make_shared<EmbeddingClassifier>(
+        ollamaClient, haClient, vectorSearch,
+        cfg.ollama.embed_model,
+        cfg.service.vector_similarity_threshold,
+        cfg.service.vector_search_limit
     );
 
-    if (!mqttClient->connect()) {
-        std::cerr << "[Main] Failed to connect to MQTT broker, exiting" << std::endl;
-        return 1;
-    }
+    auto tier3 = std::make_shared<LLMClassifier>(
+        ollamaClient, haClient,
+        cfg.ollama.fast_model,
+        cfg.ollama.smart_model,
+        cfg.ollama.escalation_threshold
+    );
 
-    // Initialize voice service
-    std::cout << "[Main] Initializing voice service..." << std::endl;
-    voiceService = std::make_shared<VoiceService>(mqttClient, haClient, dbService);
-    voiceService->start();
+    // --- Controller ---
+    auto controller = std::make_shared<CommandController>(
+        tier1, tier2, tier3, dbService, g_ingest
+    );
 
-    // Set up Drogon HTTP server for health check
-    std::cout << "[Main] Starting health check HTTP server on port " << healthCheckPort << "..." << std::endl;
+    // --- HTTP routes ---
+    drogon::app().registerHandler(
+        "/api/v1/command",
+        [controller](const drogon::HttpRequestPtr& req,
+                     std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
+            controller->handleCommand(req, std::move(cb));
+        },
+        {drogon::Post}
+    );
+
+    drogon::app().registerHandler(
+        "/admin/reindex",
+        [controller](const drogon::HttpRequestPtr& req,
+                     std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
+            controller->handleReindex(req, std::move(cb));
+        },
+        {drogon::Post}
+    );
 
     drogon::app().registerHandler(
         "/health",
-        [&dbService, &mqttClient](const drogon::HttpRequestPtr& req,
-                                   std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+        [&dbService, &vectorSearch](
+            const drogon::HttpRequestPtr& req,
+            std::function<void(const drogon::HttpResponsePtr&)>&& cb) {
+
             Json::Value response;
-            response["status"] = "healthy";
+            response["status"]  = "healthy";
             response["service"] = "hms-assist";
+            response["version"] = "2.0.0";
 
             Json::Value components;
-            components["mqtt"] = mqttClient->isConnected() ? "connected" : "disconnected";
-            components["database"] = dbService->isConnected() ? "connected" : "disconnected";
-
+            components["database"]      = dbService->isConnected() ? "connected" : "disconnected";
+            components["vector_db"]     = "connected";
+            components["entity_count"]  = vectorSearch->entityCount();
             response["components"] = components;
 
-            // Statistics
             Json::Value stats;
-            stats["total_commands"] = dbService->getTotalCommands();
-            stats["successful_intents"] = dbService->getSuccessfulIntents();
-
+            stats["total_commands"]      = dbService->getTotalCommands();
+            stats["successful_intents"]  = dbService->getSuccessfulIntents();
             response["statistics"] = stats;
 
-            auto httpResponse = drogon::HttpResponse::newHttpJsonResponse(response);
-            callback(httpResponse);
+            cb(drogon::HttpResponse::newHttpJsonResponse(response));
         },
         {drogon::Get}
     );
 
+    std::cout << "[Main] Starting HTTP server on port " << cfg.service.port << std::endl;
+
     drogon::app()
         .setLogPath("./")
-        .setLogLevel(trantor::Logger::kInfo)
-        .addListener("0.0.0.0", healthCheckPort)
-        .setThreadNum(1)
+        .setLogLevel(trantor::Logger::kWarn)
+        .addListener("0.0.0.0", cfg.service.port)
+        .setThreadNum(4)
         .run();
 
-    std::cout << "\n[Main] HMS-Assist service stopped" << std::endl;
+    std::cout << "[Main] HMS-Assist stopped." << std::endl;
     return 0;
 }

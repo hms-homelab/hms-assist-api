@@ -1,0 +1,135 @@
+#include "intent/EmbeddingClassifier.h"
+#include <iostream>
+#include <algorithm>
+#include <chrono>
+#include <regex>
+
+EmbeddingClassifier::EmbeddingClassifier(std::shared_ptr<OllamaClient> ollama,
+                                          std::shared_ptr<HomeAssistantClient> haClient,
+                                          std::shared_ptr<VectorSearchService> vectorSearch,
+                                          const std::string& embedModel,
+                                          float similarityThreshold,
+                                          int searchLimit)
+    : ollama_(ollama), ha_(haClient), vectorSearch_(vectorSearch),
+      embedModel_(embedModel), threshold_(similarityThreshold), limit_(searchLimit) {}
+
+IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
+    auto start = std::chrono::steady_clock::now();
+    IntentResult result;
+    result.tier = "embedding";
+
+    try {
+        // Embed the command text
+        std::vector<float> queryVec = ollama_->embed(command.text, embedModel_);
+
+        // Search vector DB
+        std::vector<EntityMatch> matches = vectorSearch_->search(queryVec, threshold_, limit_);
+
+        if (matches.empty()) {
+            result.success = false;
+            return result;
+        }
+
+        const EntityMatch& best = matches[0];
+        std::string action = inferAction(command.text, best.domain);
+
+        if (action.empty()) {
+            result.success = false;
+            return result;
+        }
+
+        // Execute against HA
+        Json::Value params;
+        if (best.domain == "climate" && action == "set_temperature") {
+            // Try to extract temperature from command text
+            std::regex tempRe(R"(\b(\d{2})\b)");
+            std::smatch m;
+            if (std::regex_search(command.text, m, tempRe)) {
+                params["temperature"] = std::stof(m[1].str());
+            }
+        }
+
+        bool haOk = ha_->callService(best.domain, action, best.entity_id, params);
+
+        // Get updated state
+        Entity updated = ha_->getEntityState(best.entity_id);
+
+        result.success       = haOk;
+        result.intent        = best.domain + "_" + action;
+        result.confidence    = best.similarity;
+        result.response_text = buildResponse(action, best.friendly_name);
+
+        result.entities["entity_id"]    = best.entity_id;
+        result.entities["domain"]       = best.domain;
+        result.entities["friendly_name"] = best.friendly_name;
+        result.entities["action"]       = action;
+        result.entities["state"]        = updated.state;
+        result.entities["similarity"]   = best.similarity;
+
+    } catch (const std::exception& e) {
+        std::cerr << "[EmbeddingClassifier] Error: " << e.what() << std::endl;
+        result.success = false;
+    }
+
+    auto end = std::chrono::steady_clock::now();
+    result.processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    return result;
+}
+
+std::string EmbeddingClassifier::inferAction(const std::string& text, const std::string& domain) {
+    std::string t = text;
+    std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+
+    if (domain == "light" || domain == "switch" || domain == "fan") {
+        if (t.find("off") != std::string::npos || t.find("disable") != std::string::npos) return "turn_off";
+        if (t.find("toggle") != std::string::npos)                                          return "toggle";
+        return "turn_on"; // default for lights/switches
+    }
+    if (domain == "lock") {
+        if (t.find("unlock") != std::string::npos || t.find("open") != std::string::npos) return "unlock";
+        return "lock";
+    }
+    if (domain == "cover") {
+        if (t.find("close") != std::string::npos || t.find("down") != std::string::npos) return "close_cover";
+        if (t.find("stop") != std::string::npos)                                          return "stop_cover";
+        return "open_cover";
+    }
+    if (domain == "media_player") {
+        if (t.find("pause") != std::string::npos || t.find("stop") != std::string::npos) return "media_pause";
+        if (t.find("next") != std::string::npos || t.find("skip") != std::string::npos)  return "media_next_track";
+        if (t.find("prev") != std::string::npos || t.find("back") != std::string::npos)  return "media_previous_track";
+        if (t.find("mute") != std::string::npos)                                          return "volume_mute";
+        return "media_play_pause";
+    }
+    if (domain == "climate") {
+        if (t.find("off") != std::string::npos) return "turn_off";
+        if (t.find("cool") != std::string::npos || t.find("cold") != std::string::npos) return "set_temperature";
+        if (t.find("heat") != std::string::npos || t.find("warm") != std::string::npos) return "set_temperature";
+        return "set_temperature";
+    }
+    if (domain == "scene")        return "turn_on";
+    if (domain == "script")       return "turn_on";
+    if (domain == "input_boolean") {
+        if (t.find("off") != std::string::npos) return "turn_off";
+        return "turn_on";
+    }
+
+    return "";
+}
+
+std::string EmbeddingClassifier::buildResponse(const std::string& action,
+                                                const std::string& friendlyName) {
+    if (action == "turn_on")            return "Turned on the " + friendlyName + ".";
+    if (action == "turn_off")           return "Turned off the " + friendlyName + ".";
+    if (action == "toggle")             return "Toggled the " + friendlyName + ".";
+    if (action == "lock")               return "Locked the " + friendlyName + ".";
+    if (action == "unlock")             return "Unlocked the " + friendlyName + ".";
+    if (action == "open_cover")         return "Opened the " + friendlyName + ".";
+    if (action == "close_cover")        return "Closed the " + friendlyName + ".";
+    if (action == "media_pause")        return "Paused " + friendlyName + ".";
+    if (action == "media_play_pause")   return "Toggled playback on " + friendlyName + ".";
+    if (action == "media_next_track")   return "Skipping to next track on " + friendlyName + ".";
+    if (action == "media_previous_track") return "Going back a track on " + friendlyName + ".";
+    if (action == "set_temperature")    return "Adjusting temperature on " + friendlyName + ".";
+    return "Done.";
+}

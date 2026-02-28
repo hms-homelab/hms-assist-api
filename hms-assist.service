@@ -1,26 +1,14 @@
 [Unit]
-Description=HMS-Assist Voice Assistant Service
-After=network.target postgresql.service emqx.service
+Description=HMS-Assist Voice Assistant API v2
+After=network.target postgresql.service
 Wants=network.target
 
 [Service]
 Type=simple
 User=aamat
-WorkingDirectory=/home/aamat/maestro_hub/hms-assist/build
-ExecStart=/home/aamat/maestro_hub/hms-assist/build/hms_assist
-
-Environment="MQTT_BROKER=192.168.2.15"
-Environment="MQTT_PORT=1883"
-Environment="MQTT_USER=aamat"
-Environment="MQTT_PASS=exploracion"
-Environment="DB_HOST=localhost"
-Environment="DB_PORT=5432"
-Environment="DB_NAME=hms_assist"
-Environment="DB_USER=maestro"
-Environment="DB_PASS=maestro_postgres_2026_secure"
-Environment="HA_URL=http://192.168.2.15:8123"
-Environment="HA_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4M2RjYjg0ZWY1MTI0ODIxYTFjNjVhNGI1NmM3YzJiMSIsImlhdCI6MTc2MzkxMjA0NiwiZXhwIjoyMDc5MjcyMDQ2fQ.0POT22oC8skYaKxYmPPrqahhNNqrCf_nSNU3L2LoChE"
-Environment="HEALTH_CHECK_PORT=8894"
+WorkingDirectory=/home/aamat/maestro_hub/projects/hms-assist/build
+ExecStart=/usr/local/bin/hms_assist
+Environment="HMS_ASSIST_CONFIG=/etc/hms-assist/config.yaml"
 
 Restart=always
 RestartSec=10

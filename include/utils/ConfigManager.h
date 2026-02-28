@@ -2,67 +2,64 @@
 #define CONFIG_MANAGER_H
 
 #include <string>
-#include <cstdlib>
+#include <stdexcept>
+#include <yaml-cpp/yaml.h>
 
 class ConfigManager {
 public:
-    // MQTT Configuration
-    static std::string getMqttBroker() {
-        return getEnv("MQTT_BROKER", "192.168.2.15");
+    static ConfigManager& instance() {
+        static ConfigManager inst;
+        return inst;
     }
 
-    static int getMqttPort() {
-        return std::stoi(getEnv("MQTT_PORT", "1883"));
-    }
+    void load(const std::string& path);
 
-    static std::string getMqttUser() {
-        return getEnv("MQTT_USER", "aamat");
-    }
+    struct HAConfig {
+        std::string url;
+        std::string token;
+    };
 
-    static std::string getMqttPassword() {
-        return getEnv("MQTT_PASS", "exploracion");
-    }
+    struct DBConfig {
+        std::string host;
+        int port{5432};
+        std::string name;
+        std::string user;
+        std::string password;
+        std::string ha_db_name;  // HA recorder DB for direct entity queries
+    };
 
-    // PostgreSQL Configuration
-    static std::string getDbHost() {
-        return getEnv("DB_HOST", "localhost");
-    }
+    struct OllamaConfig {
+        std::string url;
+        std::string embed_model;
+        std::string fast_model;
+        std::string smart_model;
+        float escalation_threshold{0.7f};
+    };
 
-    static int getDbPort() {
-        return std::stoi(getEnv("DB_PORT", "5432"));
-    }
+    struct WyomingConfig {
+        std::string piper_host;
+        int piper_port{10200};
+        std::string whisper_host;
+        int whisper_port{10300};
+    };
 
-    static std::string getDbName() {
-        return getEnv("DB_NAME", "hms_assist");
-    }
+    struct ServiceConfig {
+        int port{8894};
+        float vector_similarity_threshold{0.82f};
+        int vector_search_limit{5};
+    };
 
-    static std::string getDbUser() {
-        return getEnv("DB_USER", "maestro");
-    }
+    HAConfig ha;
+    DBConfig db;
+    OllamaConfig ollama;
+    WyomingConfig wyoming;
+    ServiceConfig service;
 
-    static std::string getDbPassword() {
-        return getEnv("DB_PASS", "maestro_postgres_2026_secure");
-    }
-
-    // Home Assistant Configuration
-    static std::string getHaUrl() {
-        return getEnv("HA_URL", "http://192.168.2.15:8123");
-    }
-
-    static std::string getHaToken() {
-        return getEnv("HA_TOKEN", "");
-    }
-
-    // Health Check Configuration
-    static int getHealthCheckPort() {
-        return std::stoi(getEnv("HEALTH_CHECK_PORT", "8894"));
-    }
+    std::string dbConnectionString() const;
+    std::string haDbConnectionString() const;  // Connection string for HA recorder DB
 
 private:
-    static std::string getEnv(const char* name, const std::string& defaultValue) {
-        const char* value = std::getenv(name);
-        return value ? std::string(value) : defaultValue;
-    }
+    ConfigManager() = default;
 };
 
 #endif // CONFIG_MANAGER_H

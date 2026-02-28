@@ -118,7 +118,7 @@ IntentResult DeterministicClassifier::classify(const VoiceCommand& command) {
 
     IntentResult result;
     result.success = false;
-    result.tier = "deterministic";
+    result.tier = "tier1";
     result.confidence = 0.0f;
 
     // Try to match against all patterns
@@ -161,7 +161,7 @@ IntentResult DeterministicClassifier::classify(const VoiceCommand& command) {
 
 IntentResult DeterministicClassifier::processLightControl(const std::smatch& match, const VoiceCommand& command) {
     IntentResult result;
-    result.tier = "deterministic";
+    result.tier = "tier1";
 
     // Extract location from regex match (group 1)
     std::string location = match[1].str();
@@ -172,7 +172,6 @@ IntentResult DeterministicClassifier::processLightControl(const std::smatch& mat
     if (entities.empty()) {
         result.success = false;
         result.response_text = "I couldn't find a light matching '" + location + "'";
-        result.tts_url = "";  // TODO: Generate TTS URL
         return result;
     }
 
@@ -208,14 +207,13 @@ IntentResult DeterministicClassifier::processLightControl(const std::smatch& mat
         result.response_text = "Sorry, I couldn't control the " + light.friendly_name;
     }
 
-    result.tts_url = "";  // TODO: Generate TTS URL with Wyoming Piper
 
     return result;
 }
 
 IntentResult DeterministicClassifier::processThermostatControl(const std::smatch& match, const VoiceCommand& command) {
     IntentResult result;
-    result.tier = "deterministic";
+    result.tier = "tier1";
     result.intent = "thermostat_control";
 
     // Extract location and temperature
@@ -259,7 +257,7 @@ IntentResult DeterministicClassifier::processThermostatControl(const std::smatch
 
 IntentResult DeterministicClassifier::processLockControl(const std::smatch& match, const VoiceCommand& command) {
     IntentResult result;
-    result.tier = "deterministic";
+    result.tier = "tier1";
     result.intent = "lock_control";
 
     std::string location = match[1].str();
@@ -300,7 +298,7 @@ IntentResult DeterministicClassifier::processLockControl(const std::smatch& matc
 
 IntentResult DeterministicClassifier::processMediaControl(const std::smatch& match, const VoiceCommand& command) {
     IntentResult result;
-    result.tier = "deterministic";
+    result.tier = "tier1";
     result.intent = "media_control";
 
     // Find media_player entity (default to first available)
@@ -343,7 +341,7 @@ IntentResult DeterministicClassifier::processMediaControl(const std::smatch& mat
 
 IntentResult DeterministicClassifier::processSceneControl(const std::smatch& match, const VoiceCommand& command) {
     IntentResult result;
-    result.tier = "deterministic";
+    result.tier = "tier1";
     result.intent = "scene_control";
 
     std::string scene_name = match[1].str();

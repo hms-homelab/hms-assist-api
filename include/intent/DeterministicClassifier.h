@@ -20,7 +20,6 @@ public:
     explicit DeterministicClassifier(std::shared_ptr<HomeAssistantClient> haClient);
 
     IntentResult classify(const VoiceCommand& command) override;
-    std::string getTier() const override { return "deterministic"; }
 
 private:
     void initializePatterns();
