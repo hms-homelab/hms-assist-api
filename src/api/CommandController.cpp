@@ -2,6 +2,7 @@
 #include <iostream>
 #include <chrono>
 #include <future>
+#include <thread>
 #include <vector>
 
 CommandController::CommandController(std::shared_ptr<IntentClassifier> tier1,
@@ -145,7 +146,8 @@ IntentResult CommandController::runPipeline(const VoiceCommand& command) {
             for (size_t i = 0; i < split.sub_commands.size(); ++i) {
                 const auto& sc = split.sub_commands[i];
                 if (sc.sequential && !wave.empty()) {
-                    flushWave();  // wait for current wave before starting this command
+                    flushWave();  // wait for current wave to complete
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }
                 VoiceCommand sub;
                 sub.text       = sc.text;
