@@ -20,7 +20,8 @@ void signalHandler(int signal) {
 
 int main(int argc, char* argv[]) {
     std::cout << "==========================================" << std::endl;
-    std::cout << " HMS-Assist Voice Assistant API v2.0"       << std::endl;
+    std::cout << " HMS-Assist Voice Assistant API v" HMS_VERSION_STRING
+              << " (build " << HMS_BUILD_NUMBER << ", " << HMS_GIT_HASH << ")" << std::endl;
     std::cout << "==========================================" << std::endl;
 
     // Config path: env var > default
@@ -106,7 +107,9 @@ int main(int argc, char* argv[]) {
             Json::Value response;
             response["status"]  = "healthy";
             response["service"] = "hms-assist";
-            response["version"] = "2.0.0";
+            response["version"] = HMS_VERSION_STRING;
+            response["build"]   = HMS_BUILD_NUMBER;
+            response["commit"]  = HMS_GIT_HASH;
 
             Json::Value components;
             components["database"]      = dbService->isConnected() ? "connected" : "disconnected";
