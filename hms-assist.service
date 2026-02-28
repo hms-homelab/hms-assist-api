@@ -6,13 +6,13 @@ Wants=network.target
 [Service]
 Type=simple
 User=aamat
+WorkingDirectory=/var/lib/hms-assist
 ExecStart=/usr/local/bin/hms_assist
 Environment="HMS_ASSIST_CONFIG=/etc/hms-assist/config.yaml"
 
 Restart=always
 RestartSec=10
 NoNewPrivileges=true
-PrivateTmp=true
 
 StandardOutput=journal
 StandardError=journal

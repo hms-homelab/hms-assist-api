@@ -78,41 +78,47 @@ IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
     return result;
 }
 
+// Returns true when `word` appears as a whole word in `text`.
+// Uses \b word boundaries so "off" won't match inside "coffee" or "offset".
+static bool hasWord(const std::string& text, const std::string& word) {
+    return std::regex_search(text, std::regex("\\b" + word + "\\b"));
+}
+
 std::string EmbeddingClassifier::inferAction(const std::string& text, const std::string& domain) {
     std::string t = text;
     std::transform(t.begin(), t.end(), t.begin(), ::tolower);
 
     if (domain == "light" || domain == "switch" || domain == "fan") {
-        if (t.find("off") != std::string::npos || t.find("disable") != std::string::npos) return "turn_off";
-        if (t.find("toggle") != std::string::npos)                                          return "toggle";
+        if (hasWord(t, "off") || hasWord(t, "disable")) return "turn_off";
+        if (hasWord(t, "toggle"))                        return "toggle";
         return "turn_on"; // default for lights/switches
     }
     if (domain == "lock") {
-        if (t.find("unlock") != std::string::npos || t.find("open") != std::string::npos) return "unlock";
+        if (hasWord(t, "unlock") || hasWord(t, "open")) return "unlock";
         return "lock";
     }
     if (domain == "cover") {
-        if (t.find("close") != std::string::npos || t.find("down") != std::string::npos) return "close_cover";
-        if (t.find("stop") != std::string::npos)                                          return "stop_cover";
+        if (hasWord(t, "close") || hasWord(t, "down")) return "close_cover";
+        if (hasWord(t, "stop"))                         return "stop_cover";
         return "open_cover";
     }
     if (domain == "media_player") {
-        if (t.find("pause") != std::string::npos || t.find("stop") != std::string::npos) return "media_pause";
-        if (t.find("next") != std::string::npos || t.find("skip") != std::string::npos)  return "media_next_track";
-        if (t.find("prev") != std::string::npos || t.find("back") != std::string::npos)  return "media_previous_track";
-        if (t.find("mute") != std::string::npos)                                          return "volume_mute";
+        if (hasWord(t, "pause") || hasWord(t, "stop")) return "media_pause";
+        if (hasWord(t, "next")  || hasWord(t, "skip")) return "media_next_track";
+        if (hasWord(t, "prev")  || hasWord(t, "back")) return "media_previous_track";
+        if (hasWord(t, "mute"))                         return "volume_mute";
         return "media_play_pause";
     }
     if (domain == "climate") {
-        if (t.find("off") != std::string::npos) return "turn_off";
-        if (t.find("cool") != std::string::npos || t.find("cold") != std::string::npos) return "set_temperature";
-        if (t.find("heat") != std::string::npos || t.find("warm") != std::string::npos) return "set_temperature";
+        if (hasWord(t, "off"))                                    return "turn_off";
+        if (hasWord(t, "cool") || hasWord(t, "cold"))             return "set_temperature";
+        if (hasWord(t, "heat") || hasWord(t, "warm"))             return "set_temperature";
         return "set_temperature";
     }
     if (domain == "scene")        return "turn_on";
     if (domain == "script")       return "turn_on";
     if (domain == "input_boolean") {
-        if (t.find("off") != std::string::npos) return "turn_off";
+        if (hasWord(t, "off")) return "turn_off";
         return "turn_on";
     }
 

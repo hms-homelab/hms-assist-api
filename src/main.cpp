@@ -127,7 +127,7 @@ int main(int argc, char* argv[]) {
     std::cout << "[Main] Starting HTTP server on port " << cfg.service.port << std::endl;
 
     drogon::app()
-        .setLogPath("./")
+        .setLogPath("/var/log/hms-assist")
         .setLogLevel(trantor::Logger::kWarn)
         .addListener("0.0.0.0", cfg.service.port)
         .setThreadNum(4)
