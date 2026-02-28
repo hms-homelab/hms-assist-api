@@ -108,41 +108,53 @@ IntentResult CommandController::runPipeline(const VoiceCommand& command) {
         SplitResult split = tier3_->split(command);  // virtual: LLMClassifier overrides
 
         if (!split.sub_commands.empty()) {
-            // Launch all sub-pipelines in parallel — each is independent I/O
-            // (vector search + HA HTTP call), no shared mutable state.
-            std::vector<std::future<IntentResult>> futures;
-            futures.reserve(split.sub_commands.size());
-            for (const auto& subText : split.sub_commands) {
-                VoiceCommand sub;
-                sub.text       = subText;
-                sub.device_id  = command.device_id;
-                sub.confidence = 1.0f;
-                futures.push_back(std::async(std::launch::async,
-                    [this, sub]() { return runSinglePipeline(sub); }));
-            }
-
-            // Collect results in original order
+            // Wave-based execution:
+            //   sequential:false → launch in parallel with current wave
+            //   sequential:true  → flush (wait for) current wave first, then start new wave
+            // This handles both independent devices (parallel) and ordered operations
+            // on the same device (e.g. restart: turn_off then turn_on).
+            using FuturePair = std::pair<size_t, std::future<IntentResult>>;
+            std::vector<FuturePair> wave;
             Json::Value executedCmds(Json::arrayValue);
+            executedCmds.resize(split.sub_commands.size());
             bool allOk = true;
             std::string combinedResponse;
 
-            for (size_t i = 0; i < split.sub_commands.size(); ++i) {
-                IntentResult subResult = futures[i].get();
-                allOk = allOk && subResult.success;
+            auto flushWave = [&]() {
+                for (auto& [idx, fut] : wave) {
+                    IntentResult subResult = fut.get();
+                    allOk = allOk && subResult.success;
 
-                Json::Value entry;
-                entry["text"]     = split.sub_commands[i];
-                entry["tier"]     = subResult.tier;
-                entry["intent"]   = subResult.intent;
-                entry["success"]  = subResult.success;
-                entry["entities"] = subResult.entities;
-                executedCmds.append(entry);
+                    Json::Value entry;
+                    entry["text"]       = split.sub_commands[idx].text;
+                    entry["sequential"] = split.sub_commands[idx].sequential;
+                    entry["tier"]       = subResult.tier;
+                    entry["intent"]     = subResult.intent;
+                    entry["success"]    = subResult.success;
+                    entry["entities"]   = subResult.entities;
+                    executedCmds[static_cast<int>(idx)] = entry;
 
-                if (!subResult.response_text.empty() && subResult.success) {
-                    if (!combinedResponse.empty()) combinedResponse += " ";
-                    combinedResponse += subResult.response_text;
+                    if (!subResult.response_text.empty() && subResult.success) {
+                        if (!combinedResponse.empty()) combinedResponse += " ";
+                        combinedResponse += subResult.response_text;
+                    }
                 }
+                wave.clear();
+            };
+
+            for (size_t i = 0; i < split.sub_commands.size(); ++i) {
+                const auto& sc = split.sub_commands[i];
+                if (sc.sequential && !wave.empty()) {
+                    flushWave();  // wait for current wave before starting this command
+                }
+                VoiceCommand sub;
+                sub.text       = sc.text;
+                sub.device_id  = command.device_id;
+                sub.confidence = 1.0f;
+                wave.push_back({i, std::async(std::launch::async,
+                    [this, sub]() { return runSinglePipeline(sub); })});
             }
+            flushWave();  // drain final wave
 
             if (!split.non_ha.empty()) {
                 if (!combinedResponse.empty()) combinedResponse += " ";

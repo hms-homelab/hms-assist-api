@@ -22,9 +22,14 @@ struct IntentResult {
     Json::Value entities;  // Flexible KV bag: entity_id, state, commands array, etc.
 };
 
+struct SubCommand {
+    std::string text;
+    bool sequential{false};  // true = wait for all previous commands to finish first
+};
+
 struct SplitResult {
-    std::vector<std::string> sub_commands; // individual HA command strings
-    std::string non_ha;                    // answer for non-HA parts (jokes, etc.)
+    std::vector<SubCommand> sub_commands;
+    std::string non_ha;  // answer for non-HA parts (jokes, questions)
 };
 
 class IntentClassifier {

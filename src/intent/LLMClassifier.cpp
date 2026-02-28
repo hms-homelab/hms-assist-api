@@ -228,13 +228,29 @@ SplitResult LLMClassifier::split(const VoiceCommand& command) {
 
 Output ONLY a JSON object. No prose.
 
-Example: "turn off coffee and turn on sala 1 and tell me a joke about cows"
-{"sub_commands":["turn off coffee","turn on sala 1"],"non_ha":"Why do cows wear bells? Because their horns don't work!"}
+Each sub-command has:
+- "text": the command string
+- "sequential": true if this command must wait for the previous one to finish first
+
+sequential:true when:
+- same device (restart, power-cycle: off THEN on)
+- explicit ordering ("first ... then ...", "after that ...")
+- logical dependency (unlock door, then open it)
+
+sequential:false when commands are on different/independent devices.
+
+Example 1 — independent devices:
+"turn off coffee and turn on sala 1 and tell me a joke about cows"
+{"sub_commands":[{"text":"turn off coffee","sequential":false},{"text":"turn on sala 1","sequential":false}],"non_ha":"Why do cows wear bells? Because their horns don't work!"}
+
+Example 2 — restart (same device, ordered):
+"restart the router and turn on the TV"
+{"sub_commands":[{"text":"turn off router","sequential":false},{"text":"turn on router","sequential":true},{"text":"turn on TV","sequential":false}],"non_ha":""}
 
 Rules:
-- sub_commands: only the device/automation commands (turn on/off, lock, play, etc.)
-- non_ha: answer any non-HA parts (jokes, questions, chat). Empty string if none.
-- Keep each sub_command as close to the original wording as possible.)";
+- sub_commands: only HA device/automation commands
+- non_ha: answer non-HA parts (jokes, questions). Empty string if none.
+- Keep each sub_command text close to the original wording.)";
 
     Json::Value llmJson;
     try {
@@ -253,8 +269,15 @@ Rules:
     const Json::Value& arr = llmJson["sub_commands"];
     if (arr.isArray()) {
         for (const auto& v : arr) {
-            std::string s = v.asString();
-            if (!s.empty()) result.sub_commands.push_back(s);
+            if (v.isString()) {
+                // Backward-compat: plain string (old format)
+                result.sub_commands.push_back({v.asString(), false});
+            } else if (v.isObject()) {
+                SubCommand sc;
+                sc.text       = v.get("text", "").asString();
+                sc.sequential = v.get("sequential", false).asBool();
+                if (!sc.text.empty()) result.sub_commands.push_back(sc);
+            }
         }
     }
     return result;
