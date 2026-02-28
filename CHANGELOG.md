@@ -5,6 +5,32 @@ All notable changes to hms-assist-api will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-02-28
+
+### Changed
+- **Compound command architecture** (LLM-as-splitter): commands containing ` and ` now route
+  to a lightweight LLM split step (no entity context) that returns individual sub-command
+  strings and an optional non-HA answer (jokes, questions). Each sub-command is then
+  independently routed through tier1 → tier2. This replaces the previous full-entity-context
+  approach, cutting compound command latency from ~16s to ~7s.
+
+### Added
+- `IntentClassifier::split()` virtual method (default no-op) so any tier3 implementation
+  can optionally handle compound splitting
+- `LLMClassifier::split()` — tiny prompt, no entity list, outputs `sub_commands[]` + `non_ha`
+- Pre-filtered entity context for single ambiguous tier3 calls: embeds the command and
+  passes only the top-25 most relevant entities to the LLM (prevents 0.5 confidence
+  saturation from 1147-entity context)
+- `format: "json"` in Ollama API requests for `chatJson()` — enforces JSON output at the
+  API level regardless of model tendency to generate prose
+
+## [2.2.0] - 2026-02-28
+
+### Changed
+- **Compound command routing**: commands containing ` and ` now bypass tier2 (single-entity
+  vector search) and route directly to tier3 (LLM). This ensures "turn off X and turn on Y"
+  executes both intents instead of silently resolving only the best-matching entity.
+
 ## [2.1.0] - 2026-02-28
 
 ### Added

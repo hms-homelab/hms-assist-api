@@ -4,6 +4,7 @@
 #include "intent/IntentClassifier.h"
 #include "clients/OllamaClient.h"
 #include "clients/HomeAssistantClient.h"
+#include "services/VectorSearchService.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,6 +30,8 @@ class LLMClassifier : public IntentClassifier {
 public:
     LLMClassifier(std::shared_ptr<OllamaClient> ollama,
                   std::shared_ptr<HomeAssistantClient> haClient,
+                  std::shared_ptr<VectorSearchService> vectorSearch,
+                  const std::string& embedModel,
                   const std::string& fastModel,
                   const std::string& smartModel,
                   float escalationThreshold);
@@ -38,20 +41,26 @@ public:
     // Refresh the entity snapshot used in the system prompt (called after ingest)
     void refreshEntityCache(const std::vector<Entity>& entities);
 
+    // Split a compound command into individual sub-commands (no entity context needed).
+    SplitResult split(const VoiceCommand& command) override;
+
 private:
     std::shared_ptr<OllamaClient> ollama_;
     std::shared_ptr<HomeAssistantClient> ha_;
+    std::shared_ptr<VectorSearchService> vectorSearch_;
+    std::string embedModel_;
     std::string fastModel_;
     std::string smartModel_;
     float escalationThreshold_;
-    std::string entityCacheJson_;  // Serialized entity list for LLM context
+    std::string entityCacheJson_;  // Fallback: full entity list (used if vector pre-filter fails)
 
     LLMPlan parsePlan(const Json::Value& llmJson);
     IntentResult executePlan(const LLMPlan& plan, const VoiceCommand& command,
                              const std::string& modelUsed);
 
-    std::string buildSystemPrompt() const;
+    std::string buildSystemPrompt(const std::string& entityJson) const;
     std::string buildUserPrompt(const VoiceCommand& command) const;
+    std::string preFilterEntities(const VoiceCommand& command) const;
 };
 
 #endif // LLM_CLASSIFIER_H

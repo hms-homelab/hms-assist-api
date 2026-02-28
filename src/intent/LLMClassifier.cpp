@@ -6,11 +6,13 @@
 
 LLMClassifier::LLMClassifier(std::shared_ptr<OllamaClient> ollama,
                                std::shared_ptr<HomeAssistantClient> haClient,
+                               std::shared_ptr<VectorSearchService> vectorSearch,
+                               const std::string& embedModel,
                                const std::string& fastModel,
                                const std::string& smartModel,
                                float escalationThreshold)
-    : ollama_(ollama), ha_(haClient),
-      fastModel_(fastModel), smartModel_(smartModel),
+    : ollama_(ollama), ha_(haClient), vectorSearch_(vectorSearch),
+      embedModel_(embedModel), fastModel_(fastModel), smartModel_(smartModel),
       escalationThreshold_(escalationThreshold) {}
 
 void LLMClassifier::refreshEntityCache(const std::vector<Entity>& entities) {
@@ -44,11 +46,16 @@ IntentResult LLMClassifier::classify(const VoiceCommand& command) {
         }
     }
 
+    // Pre-filter entities: embed the command, grab the top 25 by cosine similarity.
+    // This shrinks the LLM context from ~1100 entities to ~25, letting the 8b
+    // model stay confident and avoid unnecessary escalation.
+    std::string filteredEntities = preFilterEntities(command);
+
     // --- Tier 3a: fast model ---
     std::string modelUsed = fastModel_;
     Json::Value llmJson;
     try {
-        llmJson = ollama_->chatJson(buildUserPrompt(command), fastModel_, buildSystemPrompt());
+        llmJson = ollama_->chatJson(buildUserPrompt(command), fastModel_, buildSystemPrompt(filteredEntities));
     } catch (const std::exception& e) {
         std::cerr << "[LLMClassifier] Fast model failed: " << e.what() << std::endl;
         IntentResult r;
@@ -66,7 +73,7 @@ IntentResult LLMClassifier::classify(const VoiceCommand& command) {
                   << plan.escalate << ", confidence=" << plan.confidence << ")" << std::endl;
         modelUsed = smartModel_;
         try {
-            llmJson = ollama_->chatJson(buildUserPrompt(command), smartModel_, buildSystemPrompt());
+            llmJson = ollama_->chatJson(buildUserPrompt(command), smartModel_, buildSystemPrompt(filteredEntities));
             plan = parsePlan(llmJson);
         } catch (const std::exception& e) {
             std::cerr << "[LLMClassifier] Smart model failed: " << e.what() << std::endl;
@@ -169,36 +176,88 @@ IntentResult LLMClassifier::executePlan(const LLMPlan& plan,
     return result;
 }
 
-std::string LLMClassifier::buildSystemPrompt() const {
-    return R"(You are a voice assistant for a smart home. Your job is to parse voice commands into structured Home Assistant service calls.
+std::string LLMClassifier::buildSystemPrompt(const std::string& entityJson) const {
+    return R"(You are a smart home voice assistant. Parse voice commands into Home Assistant service calls.
 
-You must respond with a single valid JSON object — nothing else, no prose, no markdown.
+Output ONLY a single JSON object. No prose, no explanation, no markdown.
 
-Response format:
-{
-  "commands": [
-    {
-      "intent": "<descriptive intent name>",
-      "entity_id": "<exact entity_id from the list>",
-      "domain": "<entity domain>",
-      "action": "<HA service action: turn_on|turn_off|toggle|lock|unlock|set_temperature|media_play_pause|media_next_track|media_previous_track|open_cover|close_cover|turn_on>",
-      "params": {}
-    }
-  ],
-  "escalate": false,
-  "confidence": 0.95,
-  "response_text": "Human-friendly confirmation of what was done or will be done."
-}
+Example — "turn off the coffee maker and turn on sala 1":
+{"commands":[{"intent":"turn_off_coffee","entity_id":"switch.coffee","domain":"switch","action":"turn_off","params":{}},{"intent":"turn_on_sala_1","entity_id":"light.sala_1","domain":"light","action":"turn_on","params":{}}],"escalate":false,"confidence":0.95,"response_text":"Turned off the coffee maker and turned on Sala 1."}
 
 Rules:
-- Split compound commands into multiple entries in "commands".
-- Only use entity_ids from the provided entity list.
-- Set "escalate": true if the command is ambiguous, requires web information, or needs complex reasoning.
-- Set "confidence" between 0.0 and 1.0.
-- For set_temperature, include {"temperature": <number>} in params.
-- If no matching entity is found, return commands: [] and escalate: true.
-- response_text should be natural and conversational, confirming what you did.)" +
-           std::string("\n\nAvailable entities:\n") + entityCacheJson_;
+- commands: array of HA service calls. One entry per device/entity.
+- entity_id: must be an exact match from the Available entities list below.
+- action: one of turn_on | turn_off | toggle | lock | unlock | set_temperature | media_play_pause | media_next_track | media_previous_track | open_cover | close_cover | stop_cover
+- params: {} unless action is set_temperature, then {"temperature": <number>}
+- confidence: 0.9-1.0 when entities are clearly matched; 0.5-0.8 when uncertain
+- escalate: true only if no entity matches or the command needs web/external data
+- Non-HA requests (jokes, questions): return commands:[] with escalate:false and answer in response_text
+- response_text: short natural language confirmation of what was done)" +
+           std::string("\n\nAvailable entities:\n") + entityJson;
+}
+
+std::string LLMClassifier::preFilterEntities(const VoiceCommand& command) const {
+    // Embed the command and retrieve top-25 candidates from pgvector.
+    // This keeps the LLM context small enough for the 8b model to stay confident.
+    try {
+        std::vector<float> queryVec = ollama_->embed("search_query: " + command.text, embedModel_);
+        // threshold=0.0 → return whatever the top-25 are regardless of score
+        std::vector<EntityMatch> matches = vectorSearch_->search(queryVec, 0.0f, 25);
+
+        Json::Value arr(Json::arrayValue);
+        for (const auto& m : matches) {
+            Json::Value item;
+            item["entity_id"] = m.entity_id;
+            item["name"]      = m.friendly_name;
+            item["domain"]    = m.domain;
+            item["state"]     = m.state;
+            arr.append(item);
+        }
+        Json::StreamWriterBuilder wb;
+        wb["indentation"] = "";
+        return Json::writeString(wb, arr);
+    } catch (const std::exception& e) {
+        std::cerr << "[LLMClassifier] preFilterEntities failed: " << e.what()
+                  << " — falling back to full entity cache" << std::endl;
+        return entityCacheJson_;
+    }
+}
+
+SplitResult LLMClassifier::split(const VoiceCommand& command) {
+    static const std::string kSplitPrompt = R"(Split a compound voice command into individual smart home sub-commands.
+
+Output ONLY a JSON object. No prose.
+
+Example: "turn off coffee and turn on sala 1 and tell me a joke about cows"
+{"sub_commands":["turn off coffee","turn on sala 1"],"non_ha":"Why do cows wear bells? Because their horns don't work!"}
+
+Rules:
+- sub_commands: only the device/automation commands (turn on/off, lock, play, etc.)
+- non_ha: answer any non-HA parts (jokes, questions, chat). Empty string if none.
+- Keep each sub_command as close to the original wording as possible.)";
+
+    Json::Value llmJson;
+    try {
+        llmJson = ollama_->chatJson(
+            "Voice command: \"" + command.text + "\"",
+            fastModel_,
+            kSplitPrompt
+        );
+    } catch (const std::exception& e) {
+        std::cerr << "[LLMClassifier] split() failed: " << e.what() << std::endl;
+        return {};
+    }
+
+    SplitResult result;
+    result.non_ha = llmJson.get("non_ha", "").asString();
+    const Json::Value& arr = llmJson["sub_commands"];
+    if (arr.isArray()) {
+        for (const auto& v : arr) {
+            std::string s = v.asString();
+            if (!s.empty()) result.sub_commands.push_back(s);
+        }
+    }
+    return result;
 }
 
 std::string LLMClassifier::buildUserPrompt(const VoiceCommand& command) const {

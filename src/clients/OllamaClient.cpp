@@ -78,15 +78,48 @@ std::string OllamaClient::chat(const std::string& userPrompt,
 Json::Value OllamaClient::chatJson(const std::string& userPrompt,
                                     const std::string& model,
                                     const std::string& systemPrompt) {
-    std::string raw = chat(userPrompt, model, systemPrompt);
+    // Build request with format:"json" — Ollama enforces JSON output at the API
+    // level regardless of model size, so the 8b model can't write prose.
+    Json::Value req;
+    req["model"]  = model;
+    req["stream"] = false;
+    req["format"] = "json";
+
+    Json::Value messages(Json::arrayValue);
+    if (!systemPrompt.empty()) {
+        Json::Value sys;
+        sys["role"]    = "system";
+        sys["content"] = systemPrompt;
+        messages.append(sys);
+    }
+    Json::Value user;
+    user["role"]    = "user";
+    user["content"] = userPrompt;
+    messages.append(user);
+    req["messages"] = messages;
+
+    Json::StreamWriterBuilder wb;
+    wb["indentation"] = "";
+    std::string body = Json::writeString(wb, req);
+
+    std::string resp = post("/api/chat", body);
+
+    Json::Value root;
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::istringstream ss(resp);
+    if (!Json::parseFromStream(rb, ss, &root, &errs)) {
+        throw std::runtime_error("OllamaClient::chatJson HTTP parse error: " + errs);
+    }
+
+    std::string raw = root["message"]["content"].asString();
     std::string jsonStr = extractJsonBlock(raw);
 
     Json::Value result;
-    Json::CharReaderBuilder rb;
-    std::string errs;
-    std::istringstream ss(jsonStr);
-    if (!Json::parseFromStream(rb, ss, &result, &errs)) {
-        throw std::runtime_error("OllamaClient::chatJson failed to parse JSON from model response: " + errs + "\nRaw: " + raw);
+    Json::CharReaderBuilder rb2;
+    std::istringstream ss2(jsonStr);
+    if (!Json::parseFromStream(rb2, ss2, &result, &errs)) {
+        throw std::runtime_error("OllamaClient::chatJson model JSON parse error: " + errs + "\nRaw: " + raw);
     }
     return result;
 }

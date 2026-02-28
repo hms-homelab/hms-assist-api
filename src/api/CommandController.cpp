@@ -5,7 +5,7 @@
 CommandController::CommandController(std::shared_ptr<IntentClassifier> tier1,
                                      std::shared_ptr<IntentClassifier> tier2,
                                      std::shared_ptr<IntentClassifier> tier3,
-                                     std::shared_ptr<DatabaseService> db)
+                                     std::shared_ptr<DatabaseService>  db)
     : tier1_(tier1), tier2_(tier2), tier3_(tier3), db_(db) {}
 
 void CommandController::handleCommand(const drogon::HttpRequestPtr& req,
@@ -80,6 +80,12 @@ void CommandController::handleReindex(const drogon::HttpRequestPtr& req,
     cb(drogon::HttpResponse::newHttpJsonResponse(resp));
 }
 
+IntentResult CommandController::runSinglePipeline(const VoiceCommand& command) {
+    IntentResult result = tier1_->classify(command);
+    if (result.success) return result;
+    return tier2_->classify(command);
+}
+
 IntentResult CommandController::runPipeline(const VoiceCommand& command) {
     // --- Tier 1: Deterministic (regex) ---
     IntentResult result = tier1_->classify(command);
@@ -87,6 +93,67 @@ IntentResult CommandController::runPipeline(const VoiceCommand& command) {
         std::cout << "[Pipeline] Tier1 hit: " << result.intent
                   << " (" << result.processing_time_ms << "ms)" << std::endl;
         return result;
+    }
+
+    // Compound commands ("X and Y"): LLM splits into sub-strings, each fragment
+    // is routed through tier1→tier2. LLM needs no entity context — just text splitting.
+    bool isCompound = (command.text.find(" and ") != std::string::npos);
+
+    if (isCompound) {
+        std::cout << "[Pipeline] Compound command — splitting via LLM" << std::endl;
+        auto start = std::chrono::steady_clock::now();
+
+        SplitResult split = tier3_->split(command);  // virtual: LLMClassifier overrides
+
+        if (!split.sub_commands.empty()) {
+            Json::Value executedCmds(Json::arrayValue);
+            bool allOk = true;
+            std::string combinedResponse;
+
+            for (const auto& subText : split.sub_commands) {
+                VoiceCommand sub;
+                sub.text      = subText;
+                sub.device_id = command.device_id;
+                sub.confidence = 1.0f;
+
+                IntentResult subResult = runSinglePipeline(sub);
+                allOk = allOk && subResult.success;
+
+                Json::Value entry;
+                entry["text"]    = subText;
+                entry["tier"]    = subResult.tier;
+                entry["intent"]  = subResult.intent;
+                entry["success"] = subResult.success;
+                entry["entities"] = subResult.entities;
+                executedCmds.append(entry);
+
+                if (!subResult.response_text.empty() && subResult.success) {
+                    if (!combinedResponse.empty()) combinedResponse += " ";
+                    combinedResponse += subResult.response_text;
+                }
+            }
+
+            if (!split.non_ha.empty()) {
+                if (!combinedResponse.empty()) combinedResponse += " ";
+                combinedResponse += split.non_ha;
+            }
+
+            auto end = std::chrono::steady_clock::now();
+            IntentResult r;
+            r.tier                = "tier3a";
+            r.intent              = "multi_command";
+            r.success             = allOk;
+            r.confidence          = 1.0f;
+            r.response_text       = combinedResponse;
+            r.processing_time_ms  = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            r.entities["commands"] = executedCmds;
+            r.entities["non_ha"]   = split.non_ha;
+
+            std::cout << "[Pipeline] Split: " << split.sub_commands.size()
+                      << " sub-commands (" << r.processing_time_ms << "ms)" << std::endl;
+            return r;
+        }
+        // Split returned empty (LLM failed) — fall through to tier2
     }
 
     // --- Tier 2: Vector search (semantic) ---
@@ -98,7 +165,7 @@ IntentResult CommandController::runPipeline(const VoiceCommand& command) {
         return result;
     }
 
-    // --- Tier 3: LLM (8b → 120b) ---
+    // --- Tier 3: LLM with pre-filtered entity context (single ambiguous command) ---
     result = tier3_->classify(command);
     std::cout << "[Pipeline] Tier3 " << result.tier << ": "
               << (result.success ? "ok" : "fail")

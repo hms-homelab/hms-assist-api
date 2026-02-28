@@ -68,7 +68,8 @@ int main(int argc, char* argv[]) {
     );
 
     auto tier3 = std::make_shared<LLMClassifier>(
-        ollamaClient, haClient,
+        ollamaClient, haClient, vectorSearch,
+        cfg.ollama.embed_model,
         cfg.ollama.fast_model,
         cfg.ollama.smart_model,
         cfg.ollama.escalation_threshold

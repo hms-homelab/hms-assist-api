@@ -2,6 +2,7 @@
 #define INTENT_CLASSIFIER_H
 
 #include <string>
+#include <vector>
 #include <json/json.h>
 
 struct VoiceCommand {
@@ -21,10 +22,17 @@ struct IntentResult {
     Json::Value entities;  // Flexible KV bag: entity_id, state, commands array, etc.
 };
 
+struct SplitResult {
+    std::vector<std::string> sub_commands; // individual HA command strings
+    std::string non_ha;                    // answer for non-HA parts (jokes, etc.)
+};
+
 class IntentClassifier {
 public:
     virtual ~IntentClassifier() = default;
     virtual IntentResult classify(const VoiceCommand& command) = 0;
+    // Split a compound command into sub-commands. Default: no-op (returns empty).
+    virtual SplitResult split(const VoiceCommand&) { return {}; }
 };
 
 #endif // INTENT_CLASSIFIER_H
