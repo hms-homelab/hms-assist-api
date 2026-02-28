@@ -230,26 +230,32 @@ Output ONLY a JSON object. No prose.
 
 Each sub-command has:
 - "text": the command string
-- "sequential": true if this command must wait for the previous one to finish first
+- "wait_for_previous": true if this command must wait for ALL previous commands to finish first
 
-sequential:true when:
-- same device (restart, power-cycle: off THEN on)
-- explicit ordering ("first ... then ...", "after that ...")
-- logical dependency (unlock door, then open it)
+wait_for_previous:true when THIS command depends on a previous one completing:
+- same device second step: turn off coffee (wait_for_previous:false), turn on coffee (wait_for_previous:TRUE)
+- explicit ordering: "first ... then ..." → second command gets wait_for_previous:true
+- logical dependency: unlock door (wait_for_previous:false), open door (wait_for_previous:TRUE)
 
-sequential:false when commands are on different/independent devices.
+wait_for_previous:false when this command is independent (different device, no ordering needed).
+The FIRST sub-command always has wait_for_previous:false.
 
-Example 1 — independent devices:
-"turn off coffee and turn on sala 1 and tell me a joke about cows"
-{"sub_commands":[{"text":"turn off coffee","sequential":false},{"text":"turn on sala 1","sequential":false}],"non_ha":"Why do cows wear bells? Because their horns don't work!"}
+Example 1 — all independent:
+"turn off sala 1 and turn on coffee and tell me a joke about dogs"
+{"sub_commands":[{"text":"turn off sala 1","wait_for_previous":false},{"text":"turn on coffee","wait_for_previous":false}],"non_ha":"Why do dogs make terrible DJs? Because they always paws the music."}
 
-Example 2 — restart (same device, ordered):
+Example 2 — restart (turn on MUST wait for turn off):
 "restart the router and turn on the TV"
-{"sub_commands":[{"text":"turn off router","sequential":false},{"text":"turn on router","sequential":true},{"text":"turn on TV","sequential":false}],"non_ha":""}
+{"sub_commands":[{"text":"turn off router","wait_for_previous":false},{"text":"turn on router","wait_for_previous":true},{"text":"turn on TV","wait_for_previous":false}],"non_ha":""}
+
+Example 3 — explicit then:
+"turn off coffee and then turn it back on"
+{"sub_commands":[{"text":"turn off coffee","wait_for_previous":false},{"text":"turn on coffee","wait_for_previous":true}],"non_ha":""}
 
 Rules:
-- sub_commands: only HA device/automation commands
-- non_ha: answer non-HA parts (jokes, questions). Empty string if none.
+- sub_commands: ONLY device/automation commands — turn on/off, lock/unlock, play/pause, open/close, set temperature
+- non_ha: EVERYTHING else — jokes, questions, chat, weather, facts. Generate the actual answer here, not a placeholder.
+- "tell me", "what is", "who", "why", "how", "joke", "story" → always non_ha, never sub_commands
 - Keep each sub_command text close to the original wording.)";
 
     Json::Value llmJson;
@@ -270,12 +276,11 @@ Rules:
     if (arr.isArray()) {
         for (const auto& v : arr) {
             if (v.isString()) {
-                // Backward-compat: plain string (old format)
                 result.sub_commands.push_back({v.asString(), false});
             } else if (v.isObject()) {
                 SubCommand sc;
-                sc.text       = v.get("text", "").asString();
-                sc.sequential = v.get("sequential", false).asBool();
+                sc.text              = v.get("text", "").asString();
+                sc.wait_for_previous = v.get("wait_for_previous", false).asBool();
                 if (!sc.text.empty()) result.sub_commands.push_back(sc);
             }
         }

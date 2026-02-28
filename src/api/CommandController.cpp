@@ -128,7 +128,7 @@ IntentResult CommandController::runPipeline(const VoiceCommand& command) {
 
                     Json::Value entry;
                     entry["text"]       = split.sub_commands[idx].text;
-                    entry["sequential"] = split.sub_commands[idx].sequential;
+                    entry["wait_for_previous"] = split.sub_commands[idx].wait_for_previous;
                     entry["tier"]       = subResult.tier;
                     entry["intent"]     = subResult.intent;
                     entry["success"]    = subResult.success;
@@ -145,7 +145,7 @@ IntentResult CommandController::runPipeline(const VoiceCommand& command) {
 
             for (size_t i = 0; i < split.sub_commands.size(); ++i) {
                 const auto& sc = split.sub_commands[i];
-                if (sc.sequential && !wave.empty()) {
+                if (sc.wait_for_previous && !wave.empty()) {
                     flushWave();  // wait for current wave to complete
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }

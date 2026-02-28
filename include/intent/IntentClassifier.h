@@ -24,7 +24,7 @@ struct IntentResult {
 
 struct SubCommand {
     std::string text;
-    bool sequential{false};  // true = wait for all previous commands to finish first
+    bool wait_for_previous{false};  // true = wait for all currently running commands first
 };
 
 struct SplitResult {

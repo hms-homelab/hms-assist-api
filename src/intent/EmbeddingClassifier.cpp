@@ -47,6 +47,7 @@ IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
             ha_->callService(best.domain, "turn_off", best.entity_id, {});
             std::this_thread::sleep_for(std::chrono::seconds(1));
             bool haOk = ha_->callService(best.domain, "turn_on", best.entity_id, {});
+            std::this_thread::sleep_for(std::chrono::milliseconds(1200));
             Entity updated = ha_->getEntityState(best.entity_id);
             result.success       = haOk;
             result.intent        = best.domain + "_restart";
@@ -82,6 +83,9 @@ IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
         }
 
         bool haOk = ha_->callService(best.domain, action, best.entity_id, params);
+
+        // Brief wait for HA to process the state change before reading it back
+        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
 
         // Get updated state
         Entity updated = ha_->getEntityState(best.entity_id);
