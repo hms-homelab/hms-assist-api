@@ -1,0 +1,34 @@
+# Build artifacts
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.make
+
+# Binaries
+hms_assist
+*.o
+*.a
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Secrets / credentials
+.env
+*.env
+.secrets
+config_local.h
+
+# Logs
+*.log
+logs/
+
+# macOS
+.DS_Store
