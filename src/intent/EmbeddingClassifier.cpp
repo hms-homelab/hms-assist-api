@@ -3,6 +3,12 @@
 #include <algorithm>
 #include <chrono>
 #include <regex>
+#include <thread>
+
+// Returns true when `word` appears as a whole word in `text`.
+static bool hasWord(const std::string& text, const std::string& word) {
+    return std::regex_search(text, std::regex("\\b" + word + "\\b"));
+}
 
 EmbeddingClassifier::EmbeddingClassifier(std::shared_ptr<OllamaClient> ollama,
                                           std::shared_ptr<HomeAssistantClient> haClient,
@@ -33,6 +39,30 @@ IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
         }
 
         const EntityMatch& best = matches[0];
+
+        // "restart" = turn_off, wait 1s, turn_on (sequential, not in inferAction)
+        std::string tLower = command.text;
+        std::transform(tLower.begin(), tLower.end(), tLower.begin(), ::tolower);
+        if (hasWord(tLower, "restart") || hasWord(tLower, "reboot") || hasWord(tLower, "cycle")) {
+            ha_->callService(best.domain, "turn_off", best.entity_id, {});
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            bool haOk = ha_->callService(best.domain, "turn_on", best.entity_id, {});
+            Entity updated = ha_->getEntityState(best.entity_id);
+            result.success       = haOk;
+            result.intent        = best.domain + "_restart";
+            result.confidence    = best.similarity;
+            result.response_text = "Restarted the " + best.friendly_name + ".";
+            result.entities["entity_id"]     = best.entity_id;
+            result.entities["domain"]        = best.domain;
+            result.entities["friendly_name"] = best.friendly_name;
+            result.entities["action"]        = "restart";
+            result.entities["state"]         = updated.state;
+            result.entities["similarity"]    = best.similarity;
+            auto end = std::chrono::steady_clock::now();
+            result.processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            return result;
+        }
+
         std::string action = inferAction(command.text, best.domain);
 
         if (action.empty()) {
@@ -76,12 +106,6 @@ IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
     auto end = std::chrono::steady_clock::now();
     result.processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
     return result;
-}
-
-// Returns true when `word` appears as a whole word in `text`.
-// Uses \b word boundaries so "off" won't match inside "coffee" or "offset".
-static bool hasWord(const std::string& text, const std::string& word) {
-    return std::regex_search(text, std::regex("\\b" + word + "\\b"));
 }
 
 std::string EmbeddingClassifier::inferAction(const std::string& text, const std::string& domain) {
@@ -139,5 +163,6 @@ std::string EmbeddingClassifier::buildResponse(const std::string& action,
     if (action == "media_next_track")   return "Skipping to next track on " + friendlyName + ".";
     if (action == "media_previous_track") return "Going back a track on " + friendlyName + ".";
     if (action == "set_temperature")    return "Adjusting temperature on " + friendlyName + ".";
+    if (action == "restart")            return "Restarted the " + friendlyName + ".";
     return "Done.";
 }
