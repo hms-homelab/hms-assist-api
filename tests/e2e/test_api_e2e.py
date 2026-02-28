@@ -260,6 +260,106 @@ class TestTierRouting(unittest.TestCase):
             self.assertIn("sala", body["entities"].get("entity_id", "").lower())
 
 
+# ─── Tier 3 (LLM) routing ─────────────────────────────────────────────────────
+
+class TestTier3Routing(unittest.TestCase):
+    """
+    Exercises the LLM split path (tier3a fast model) and smart model escalation
+    (tier3b). These are slow — allow up to 120s per test.
+
+    Compound commands trigger the LLM splitter; each sub-command then routes
+    through tier1 → tier2. The smart model is exercised via a command with
+    enough entities to stress the 8b model.
+    """
+
+    def _command(self, text: str, timeout: int = 120) -> dict:
+        if not _api_reachable():
+            raise unittest.SkipTest(f"API not reachable at {BASE_URL}")
+        resp = requests.post(
+            f"{BASE_URL}/api/v1/command",
+            json={"text": text, "device_id": "e2e_tier3"},
+            timeout=timeout,
+        )
+        return resp.json()
+
+    @skip_if_api_down
+    def test_compound_command_routes_to_tier3a_split(self):
+        """Two independent commands on different entities → tier3a split, both succeed."""
+        body = self._command("turn off sala 1 and turn on sala 2")
+        print(f"\n  [e2e] compound: tier={body['tier']} intent={body['intent']} "
+              f"time={body['processing_time_ms']}ms")
+        self.assertEqual(body["tier"], "tier3a")
+        self.assertEqual(body["intent"], "multi_command")
+        self.assertTrue(body["success"])
+        cmds = body["entities"]["commands"]
+        self.assertEqual(len(cmds), 2)
+        self.assertTrue(all(c["success"] for c in cmds))
+
+    @skip_if_api_down
+    def test_compound_parallel_flags_correct(self):
+        """Independent entities must have wait_for_previous:false."""
+        body = self._command("turn off sala 1 and turn off sala 2")
+        cmds = body["entities"]["commands"]
+        print(f"\n  [e2e] parallel flags: "
+              f"{[(c['text'], c.get('wait_for_previous')) for c in cmds]}")
+        self.assertTrue(all(not c.get("wait_for_previous", True) for c in cmds),
+                        "Independent commands should all have wait_for_previous:false")
+
+    @skip_if_api_down
+    def test_compound_sequential_restart_flags_correct(self):
+        """Same-device restart: turn_off → wait_for_previous:false, turn_on → true."""
+        body = self._command("turn off coffee and then turn it back on")
+        cmds = body["entities"]["commands"]
+        print(f"\n  [e2e] restart flags: "
+              f"{[(c['text'], c.get('wait_for_previous')) for c in cmds]}")
+        self.assertEqual(len(cmds), 2)
+        self.assertFalse(cmds[0].get("wait_for_previous", True),
+                         "First command must not wait")
+        self.assertTrue(cmds[1].get("wait_for_previous", False),
+                        "turn_on after turn_off on same device must have wait_for_previous:true")
+
+    @skip_if_api_down
+    def test_compound_with_joke_separates_non_ha(self):
+        """Joke should land in non_ha; sala must execute successfully regardless.
+
+        Note: the 8b model occasionally routes jokes containing entity words
+        (e.g. 'joke about lights') into sub_commands instead of non_ha. The
+        HA execution (sala 1) must always succeed either way.
+        """
+        body = self._command("turn off sala 1 and tell me a joke about lights")
+        non_ha = body["entities"].get("non_ha", "")
+        cmds = body["entities"]["commands"]
+        print(f"\n  [e2e] joke: cmds={len(cmds)} non_ha='{non_ha[:60]}'")
+
+        # At least one command must be the sala entity
+        sala_cmds = [c for c in cmds
+                     if "sala" in c.get("entities", {}).get("entity_id", "").lower()]
+        self.assertGreater(len(sala_cmds), 0, "sala 1 command must be present")
+        self.assertTrue(sala_cmds[0]["success"], "sala 1 must execute successfully")
+
+        # Best case: joke in non_ha. Acceptable fallback: joke slipped into sub_commands.
+        has_non_ha_joke = len(non_ha) > 5
+        has_extra_cmd   = len(cmds) > len(sala_cmds)
+        self.assertTrue(has_non_ha_joke or has_extra_cmd,
+                        "Joke must appear in non_ha or as an extra sub_command")
+
+    @skip_if_api_down
+    def test_tier3b_smart_model_escalation(self):
+        """4-entity command: should succeed via tier3a or escalate to tier3b."""
+        body = self._command(
+            "turn off sala 1 and turn off sala 2 and turn off sala 3 and lock the entryway",
+            timeout=180,
+        )
+        print(f"\n  [e2e] 4-entity: tier={body['tier']} success={body['success']} "
+              f"time={body['processing_time_ms']}ms")
+        self.assertIn(body["tier"], {"tier3a", "tier3b"})
+        self.assertEqual(body["intent"], "multi_command")
+        self.assertTrue(body["success"])
+        cmds = body["entities"]["commands"]
+        self.assertEqual(len(cmds), 4)
+        self.assertTrue(all(c["success"] for c in cmds))
+
+
 # ─── Admin reindex ─────────────────────────────────────────────────────────────
 
 class TestAdminReindex(unittest.TestCase):
