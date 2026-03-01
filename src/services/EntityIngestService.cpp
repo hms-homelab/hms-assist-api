@@ -2,6 +2,7 @@
 #include <iostream>
 #include <chrono>
 #include <sstream>
+#include <algorithm>
 #include <json/json.h>
 
 EntityIngestService::EntityIngestService(std::shared_ptr<HomeAssistantClient> haClient,
