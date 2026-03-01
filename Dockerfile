@@ -26,9 +26,11 @@ RUN cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
 # Stage 2: runtime
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libjsoncpp25 libcurl4 libyaml-cpp0.8 libpqxx-7.10 \
-    libssl3 libuuid1 zlib1g \
+    libjsoncpp25 libcurl4 libssl3 libuuid1 zlib1g libpq5 \
     && rm -rf /var/lib/apt/lists/*
+# Copy versioned libs that differ from bookworm-slim defaults
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libyaml-cpp* /usr/lib/x86_64-linux-gnu/
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libpqxx* /usr/lib/x86_64-linux-gnu/
 COPY --from=builder /usr/local/lib/libdrogon* /usr/local/lib/
 COPY --from=builder /usr/local/lib/libtrantor* /usr/local/lib/
 RUN ldconfig
