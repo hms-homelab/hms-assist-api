@@ -52,17 +52,17 @@ echo "✓ Dependencies OK"
 echo ""
 echo "[2/7] Setting up PostgreSQL..."
 
-DB_EXISTS=$(PGPASSWORD=maestro_postgres_2026_secure psql -h localhost -U maestro -d postgres \
+DB_EXISTS=$(PGPASSWORD="${HMS_DB_PASSWORD:-maestro_postgres_2026_secure}" psql -h localhost -U maestro -d postgres \
     -tAc "SELECT 1 FROM pg_database WHERE datname='hms_assist'" 2>/dev/null || true)
 
 if [ "$DB_EXISTS" != "1" ]; then
     echo "Creating database hms_assist..."
-    PGPASSWORD=maestro_postgres_2026_secure psql -h localhost -U maestro -d postgres \
+    PGPASSWORD="${HMS_DB_PASSWORD:-maestro_postgres_2026_secure}" psql -h localhost -U maestro -d postgres \
         -c "CREATE DATABASE hms_assist;"
 fi
 
 echo "Applying schema..."
-PGPASSWORD=maestro_postgres_2026_secure psql -h localhost -U maestro -d hms_assist \
+PGPASSWORD="${HMS_DB_PASSWORD:-maestro_postgres_2026_secure}" psql -h localhost -U maestro -d hms_assist \
     -f "$SCRIPT_DIR/init_database.sql" -q
 echo "✓ Database ready"
 

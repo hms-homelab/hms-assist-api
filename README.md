@@ -1,8 +1,26 @@
 # hms-assist-api
 
+[![Docker](https://ghcr-badge.egpl.dev/hms-homelab/hms-assist-api/size)](https://github.com/hms-homelab/hms-assist-api/pkgs/container/hms-assist-api)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **100% local voice assistant API with 3-tier intent classification and Home Assistant integration.**
 
 Part of the [maestro-hub](https://github.com/hms-homelab) home automation platform.
+
+---
+
+## Docker Quick Start
+
+```bash
+docker pull ghcr.io/hms-homelab/hms-assist-api:latest
+
+docker run -d \
+  -p 8894:8894 \
+  -v /etc/hms-assist/config.yaml:/etc/hms-assist/config.yaml:ro \
+  ghcr.io/hms-homelab/hms-assist-api:latest
+```
+
+See [Configuration](#configuration) for the config file format.
 
 ---
 
@@ -71,6 +89,16 @@ Any phrasing that references a known HA entity by name, even colloquially:
 - "dim the sala" → `light.sala_1`
 
 1115 entities indexed with `nomic-embed-text` + voice command examples. Threshold: 0.58 cosine similarity.
+
+#### Sensor queries (instant, no LLM)
+
+Tier 2 also handles read-only sensor queries by returning the current HA state directly — no LLM call:
+
+- "tell me the outdoor temperature" → "AWN Outdoor Temperature is 71.10 °F"
+- "what's the humidity outside" → "AWN Outdoor Humidity is 58%"
+- "how's the air quality" → sensor state returned instantly
+
+The `sensor` domain is detected at classification time; `getEntityState()` is called instead of `callService()`.
 
 ### Tier 3 — LLM (complex / ambiguous, 1–30s)
 
@@ -175,9 +203,12 @@ curl -X POST http://localhost:8894/admin/reindex
 {
   "text": "turn on the patio light",
   "device_id": "satellite_1",
-  "confidence": 1.0
+  "confidence": 1.0,
+  "media_player_entity_id": "media_player.living_room_speaker"
 }
 ```
+
+> **TTS note:** Include `media_player_entity_id` to have the response spoken via a Home Assistant media player. The `response_text` field is always returned regardless.
 
 **Response (success):**
 ```json
@@ -226,11 +257,11 @@ Config file: `/etc/hms-assist/config.yaml`
 
 ```yaml
 homeassistant:
-  url: http://192.168.2.7:8123
+  url: http://<ha-host>:8123
   token: <long-lived token>
 
 database:
-  host: localhost
+  host: <db-host>
   port: 5432
   name: hms_assist
   user: maestro
@@ -238,16 +269,16 @@ database:
   ha_db_name: homeassistant    # optional: direct HA recorder DB for faster sync
 
 ollama:
-  url: http://192.168.2.5:11434
+  url: http://<ollama-host>:11434
   embed_model: nomic-embed-text
-  fast_model: llama3.1:8b-instruct-q4_K_M
+  fast_model: llama3.2:3b
   smart_model: llama3.1:70b-instruct-q4_K_M
   escalation_threshold: 0.7
 
 wyoming:
-  piper_host: 192.168.2.5
+  piper_host: <wyoming-host>
   piper_port: 10200
-  whisper_host: 192.168.2.5
+  whisper_host: <wyoming-host>
   whisper_port: 10300
 
 service:
@@ -294,7 +325,7 @@ HMS_ASSIST_CONFIG=/etc/hms-assist/config.yaml \
   tools/venv/bin/python -m pytest tests/e2e/test_api_e2e.py -v
 ```
 
-**Test counts:** 59 C++ unit · 30 Python sync unit · 16 sync e2e · 23 API e2e = **128 total**
+**Test counts:** 77 C++ unit · 30 Python sync unit · 16 sync e2e · 23 API e2e = **146 total**
 
 ## Project Structure
 

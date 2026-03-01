@@ -38,6 +38,7 @@ void ConfigManager::load(const std::string& path) {
     service.port                       = cfg["service"]["port"].as<int>(8894);
     service.vector_similarity_threshold = cfg["service"]["vector_similarity_threshold"].as<float>(0.82f);
     service.vector_search_limit        = cfg["service"]["vector_search_limit"].as<int>(5);
+    service.tts_entity                 = cfg["service"]["tts_entity"].as<std::string>("tts.piper");
 
     std::cout << "[Config] Loaded from " << path << std::endl;
     std::cout << "[Config]   HA:     " << ha.url << std::endl;

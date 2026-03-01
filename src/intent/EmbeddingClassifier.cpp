@@ -44,20 +44,23 @@ IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
         std::string tLower = command.text;
         std::transform(tLower.begin(), tLower.end(), tLower.begin(), ::tolower);
         if (hasWord(tLower, "restart") || hasWord(tLower, "reboot") || hasWord(tLower, "cycle")) {
-            ha_->callService(best.domain, "turn_off", best.entity_id, {});
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            bool haOk = ha_->callService(best.domain, "turn_on", best.entity_id, {});
-            std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-            Entity updated = ha_->getEntityState(best.entity_id);
+            bool haOk = true;
+            if (!command.dry_run) {
+                ha_->callService(best.domain, "turn_off", best.entity_id, {});
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                haOk = ha_->callService(best.domain, "turn_on", best.entity_id, {});
+                std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+                Entity updated = ha_->getEntityState(best.entity_id);
+                result.entities["state"] = updated.state;
+            }
             result.success       = haOk;
             result.intent        = best.domain + "_restart";
             result.confidence    = best.similarity;
-            result.response_text = "Restarted the " + best.friendly_name + ".";
+            result.response_text = command.dry_run ? "" : "Restarted the " + best.friendly_name + ".";
             result.entities["entity_id"]     = best.entity_id;
             result.entities["domain"]        = best.domain;
             result.entities["friendly_name"] = best.friendly_name;
             result.entities["action"]        = "restart";
-            result.entities["state"]         = updated.state;
             result.entities["similarity"]    = best.similarity;
             auto end = std::chrono::steady_clock::now();
             result.processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -68,6 +71,31 @@ IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
 
         if (action.empty()) {
             result.success = false;
+            return result;
+        }
+
+        // Sensor query: read state, no service call
+        if (action == "query_state") {
+            result.intent      = "sensor_query";
+            result.confidence  = best.similarity;
+            result.entities["entity_id"]     = best.entity_id;
+            result.entities["domain"]        = best.domain;
+            result.entities["friendly_name"] = best.friendly_name;
+            result.entities["action"]        = action;
+            result.entities["similarity"]    = best.similarity;
+            if (!command.dry_run) {
+                Entity updated = ha_->getEntityState(best.entity_id);
+                std::string unit = updated.attributes.get("unit_of_measurement", "").asString();
+                result.response_text = best.friendly_name + " is " + updated.state
+                                     + (unit.empty() ? "" : " " + unit);
+                result.success = true;
+                result.entities["state"] = updated.state;
+                result.entities["unit"]  = unit;
+            } else {
+                result.success = true;
+            }
+            auto end = std::chrono::steady_clock::now();
+            result.processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
             return result;
         }
 
@@ -82,24 +110,25 @@ IntentResult EmbeddingClassifier::classify(const VoiceCommand& command) {
             }
         }
 
-        bool haOk = ha_->callService(best.domain, action, best.entity_id, params);
+        if (!command.dry_run) {
+            bool haOk = ha_->callService(best.domain, action, best.entity_id, params);
+            // Brief wait for HA to process the state change before reading it back
+            std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+            Entity updated = ha_->getEntityState(best.entity_id);
+            result.success = haOk;
+            result.entities["state"] = updated.state;
+        } else {
+            result.success = true;  // dry_run: entity resolved, no HA call
+        }
 
-        // Brief wait for HA to process the state change before reading it back
-        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-
-        // Get updated state
-        Entity updated = ha_->getEntityState(best.entity_id);
-
-        result.success       = haOk;
         result.intent        = best.domain + "_" + action;
         result.confidence    = best.similarity;
-        result.response_text = buildResponse(action, best.friendly_name);
+        result.response_text = command.dry_run ? "" : buildResponse(action, best.friendly_name);
 
         result.entities["entity_id"]    = best.entity_id;
         result.entities["domain"]       = best.domain;
         result.entities["friendly_name"] = best.friendly_name;
         result.entities["action"]       = action;
-        result.entities["state"]        = updated.state;
         result.entities["similarity"]   = best.similarity;
 
     } catch (const std::exception& e) {
@@ -143,6 +172,7 @@ std::string EmbeddingClassifier::inferAction(const std::string& text, const std:
         if (hasWord(t, "heat") || hasWord(t, "warm"))             return "set_temperature";
         return "set_temperature";
     }
+    if (domain == "sensor")       return "query_state";
     if (domain == "scene")        return "turn_on";
     if (domain == "script")       return "turn_on";
     if (domain == "input_boolean") {

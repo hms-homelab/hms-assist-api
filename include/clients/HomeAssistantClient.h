@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <mutex>
+#include <chrono>
 #include <json/json.h>
 
 struct Entity {
@@ -44,6 +46,11 @@ private:
 
     std::string baseUrl_;
     std::string bearerToken_;
+
+    mutable std::mutex entityCacheMutex_;
+    std::vector<Entity> entityCache_;
+    std::chrono::steady_clock::time_point entityCacheTime_;
+    static constexpr int kEntityCacheTtlSeconds = 300;
 };
 
 #endif // HOME_ASSISTANT_CLIENT_H

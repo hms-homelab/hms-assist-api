@@ -12,31 +12,31 @@ void DeterministicClassifier::initializePatterns() {
     // Light control patterns
     patterns_.push_back({
         "light_on",
-        std::regex(R"(turn\s+on\s+(?:the\s+)?(.+?)\s+light)", std::regex::icase),
+        std::regex(R"(turn\s+on\s+(?:the\s+)?(.+?)\s+lights?\b)", std::regex::icase),
         "light", "turn_on", {1}
     });
 
     patterns_.push_back({
         "light_off",
-        std::regex(R"(turn\s+off\s+(?:the\s+)?(.+?)\s+light)", std::regex::icase),
+        std::regex(R"(turn\s+off\s+(?:the\s+)?(.+?)\s+lights?\b)", std::regex::icase),
         "light", "turn_off", {1}
     });
 
     patterns_.push_back({
         "light_on",
-        std::regex(R"(switch\s+on\s+(?:the\s+)?(.+?)\s+light)", std::regex::icase),
+        std::regex(R"(switch\s+on\s+(?:the\s+)?(.+?)\s+lights?\b)", std::regex::icase),
         "light", "turn_on", {1}
     });
 
     patterns_.push_back({
         "light_off",
-        std::regex(R"(switch\s+off\s+(?:the\s+)?(.+?)\s+light)", std::regex::icase),
+        std::regex(R"(switch\s+off\s+(?:the\s+)?(.+?)\s+lights?\b)", std::regex::icase),
         "light", "turn_off", {1}
     });
 
     patterns_.push_back({
         "light_toggle",
-        std::regex(R"(toggle\s+(?:the\s+)?(.+?)\s+light)", std::regex::icase),
+        std::regex(R"(toggle\s+(?:the\s+)?(.+?)\s+lights?\b)", std::regex::icase),
         "light", "toggle", {1}
     });
 
@@ -184,14 +184,14 @@ IntentResult DeterministicClassifier::processLightControl(const std::smatch& mat
     std::string action_str;
 
     if (command.text.find("turn on") != std::string::npos || command.text.find("switch on") != std::string::npos) {
-        success = haClient_->turnOn(light.entity_id);
         action_str = "turned on";
+        success = command.dry_run ? true : haClient_->turnOn(light.entity_id);
     } else if (command.text.find("turn off") != std::string::npos || command.text.find("switch off") != std::string::npos) {
-        success = haClient_->turnOff(light.entity_id);
         action_str = "turned off";
+        success = command.dry_run ? true : haClient_->turnOff(light.entity_id);
     } else if (command.text.find("toggle") != std::string::npos) {
-        success = haClient_->toggle(light.entity_id);
         action_str = "toggled";
+        success = command.dry_run ? true : haClient_->toggle(light.entity_id);
     }
 
     result.success = success;
@@ -201,7 +201,9 @@ IntentResult DeterministicClassifier::processLightControl(const std::smatch& mat
     result.entities["location"] = location;
     result.entities["action"] = action_str;
 
-    if (success) {
+    if (command.dry_run) {
+        result.response_text = "";
+    } else if (success) {
         result.response_text = "I've " + action_str + " the " + light.friendly_name;
     } else {
         result.response_text = "Sorry, I couldn't control the " + light.friendly_name;
@@ -232,11 +234,13 @@ IntentResult DeterministicClassifier::processThermostatControl(const std::smatch
     Entity thermostat = entities[0];
 
     bool success = false;
-    if (temperature > 0) {
+    if (command.dry_run) {
+        success = true;
+        result.response_text = "";
+    } else if (temperature > 0) {
         success = haClient_->setTemperature(thermostat.entity_id, static_cast<float>(temperature));
         result.response_text = "I've set the " + thermostat.friendly_name + " to " + std::to_string(temperature) + " degrees";
     } else if (command.text.find("warmer") != std::string::npos || command.text.find("hotter") != std::string::npos) {
-        // Get current temperature and increase by 2 degrees
         Entity current = haClient_->getEntityState(thermostat.entity_id);
         float current_temp = current.attributes["temperature"].asFloat();
         success = haClient_->setTemperature(thermostat.entity_id, current_temp + 2.0f);
@@ -275,11 +279,11 @@ IntentResult DeterministicClassifier::processLockControl(const std::smatch& matc
     std::string action_str;
 
     if (command.text.find("lock") != std::string::npos && command.text.find("unlock") == std::string::npos) {
-        success = haClient_->callService("lock", "lock", lock.entity_id);
         action_str = "locked";
+        success = command.dry_run ? true : haClient_->callService("lock", "lock", lock.entity_id);
     } else if (command.text.find("unlock") != std::string::npos) {
-        success = haClient_->callService("lock", "unlock", lock.entity_id);
         action_str = "unlocked";
+        success = command.dry_run ? true : haClient_->callService("lock", "unlock", lock.entity_id);
     }
 
     result.success = success;
@@ -287,7 +291,9 @@ IntentResult DeterministicClassifier::processLockControl(const std::smatch& matc
     result.entities["entity_id"] = lock.entity_id;
     result.entities["action"] = action_str;
 
-    if (success) {
+    if (command.dry_run) {
+        result.response_text = "";
+    } else if (success) {
         result.response_text = "I've " + action_str + " the " + lock.friendly_name;
     } else {
         result.response_text = "Sorry, I couldn't control the " + lock.friendly_name;
@@ -316,21 +322,23 @@ IntentResult DeterministicClassifier::processMediaControl(const std::smatch& mat
     std::string action_str;
 
     if (command.text.find("pause") != std::string::npos) {
-        success = haClient_->callService("media_player", "media_pause", media_player.entity_id);
         action_str = "paused";
+        success = command.dry_run ? true : haClient_->callService("media_player", "media_pause", media_player.entity_id);
     } else if (command.text.find("next") != std::string::npos) {
-        success = haClient_->callService("media_player", "media_next_track", media_player.entity_id);
         action_str = "skipped to next track";
+        success = command.dry_run ? true : haClient_->callService("media_player", "media_next_track", media_player.entity_id);
     } else if (command.text.find("previous") != std::string::npos) {
-        success = haClient_->callService("media_player", "media_previous_track", media_player.entity_id);
         action_str = "went to previous track";
+        success = command.dry_run ? true : haClient_->callService("media_player", "media_previous_track", media_player.entity_id);
     }
 
     result.success = success;
     result.confidence = 0.88f;
     result.entities["entity_id"] = media_player.entity_id;
 
-    if (success) {
+    if (command.dry_run) {
+        result.response_text = "";
+    } else if (success) {
         result.response_text = "I've " + action_str;
     } else {
         result.response_text = "Sorry, I couldn't control the media player";
@@ -354,13 +362,15 @@ IntentResult DeterministicClassifier::processSceneControl(const std::smatch& mat
     }
 
     Entity scene = entities[0];
-    bool success = haClient_->turnOn(scene.entity_id);
+    bool success = command.dry_run ? true : haClient_->turnOn(scene.entity_id);
 
     result.success = success;
     result.confidence = 0.93f;
     result.entities["entity_id"] = scene.entity_id;
 
-    if (success) {
+    if (command.dry_run) {
+        result.response_text = "";
+    } else if (success) {
         result.response_text = "I've activated the " + scene.friendly_name + " scene";
     } else {
         result.response_text = "Sorry, I couldn't activate the scene";

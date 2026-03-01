@@ -8,9 +8,10 @@
 class OllamaClient {
 public:
     explicit OllamaClient(const std::string& baseUrl);
+    virtual ~OllamaClient() = default;
 
     // Generate embedding vector for text
-    std::vector<float> embed(const std::string& text, const std::string& model);
+    virtual std::vector<float> embed(const std::string& text, const std::string& model);
 
     // Chat completion — returns raw response text
     std::string chat(const std::string& userPrompt,
@@ -18,9 +19,10 @@ public:
                      const std::string& systemPrompt = "");
 
     // Chat completion — extracts and parses JSON object from model response
-    Json::Value chatJson(const std::string& userPrompt,
-                         const std::string& model,
-                         const std::string& systemPrompt = "");
+    virtual Json::Value chatJson(const std::string& userPrompt,
+                                 const std::string& model,
+                                 const std::string& systemPrompt = "",
+                                 float temperature = 0.0f);
 
     bool isReachable();
 

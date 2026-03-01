@@ -68,8 +68,7 @@ int main(int argc, char* argv[]) {
     );
 
     auto tier3 = std::make_shared<LLMClassifier>(
-        ollamaClient, haClient, vectorSearch,
-        cfg.ollama.embed_model,
+        ollamaClient,
         cfg.ollama.fast_model,
         cfg.ollama.smart_model,
         cfg.ollama.escalation_threshold
@@ -77,7 +76,7 @@ int main(int argc, char* argv[]) {
 
     // --- Controller ---
     auto controller = std::make_shared<CommandController>(
-        tier1, tier2, tier3, dbService
+        tier1, tier2, tier3, dbService, haClient, cfg.service.tts_entity
     );
 
     // --- HTTP routes ---

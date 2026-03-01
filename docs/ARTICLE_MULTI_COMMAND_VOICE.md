@@ -1,30 +1,32 @@
-# Why Every Voice Assistant Gets Multi-Command Wrong — and How to Fix It
+# I Got Tired of Losing Commands, So I Built a Multi-Command Voice API
 
 *A deep dive into HMS-Assist: a fully local, 3-tier voice command API built for Home Assistant*
 
 ---
 
-## The Problem Nobody Has Solved
+## The Problem
 
 "Turn off the sala lights, restart the coffee maker, and play some jazz."
 
-Say that to Alexa. She'll pick one — usually the last thing you said. Say it to Siri. She'll ask you to confirm each action individually. Say it to Home Assistant's built-in Assist with an LLM backend. You'll wait 30 seconds while it processes your 1,100-entity context window, and it'll probably still get one wrong.
+I say this kind of thing constantly. And every voice assistant I've tried handles it the same way: picks one thing, executes it, and quietly ignores the rest.
 
-Multi-command voice execution is a solved problem in demos. In production, with real devices, real latency, and real edge cases, nobody has actually shipped it well. Here's why — and how a 3-tier architecture changes the game.
+After years of working around this — breaking commands into separate utterances, waiting for confirmations, repeating myself — I decided to understand *why* this keeps happening and whether it was actually fixable.
 
----
-
-## Why Alexa Can't Do It
-
-Alexa's intent model is fundamentally single-intent. Each utterance maps to one skill, one intent, one set of slots. Amazon has bolted on "routines" as a workaround — you manually define that "good morning" means turn on lights + start coffee + play news. But routines are static. You configure them in advance. They don't generalize.
-
-"Turn off the sala and restart the coffee" isn't a routine you've set up. Alexa hears it, picks the most confident intent match, executes one command, and calls it done. The rest of your sentence disappears.
-
-The deeper issue is architectural. Alexa was designed for a world where voice commands are simple, atomic, and map 1:1 to skills written by third parties. That model doesn't compose. Multiple intents in a single utterance require a fundamentally different design — one where the system understands that a sentence can contain multiple independent requests.
+It is. Here's how.
 
 ---
 
-## Why Home Assistant's LLM Assist Is Too Slow
+## Why Single-Intent Systems Drop Commands
+
+The dominant voice assistant model — Alexa, Siri, Google — treats each utterance as exactly one intent. That's a deliberate architectural choice: one utterance → one skill → one action.
+
+Amazon bolted on "routines" as a workaround. You manually define that "good morning" means turn on lights + start coffee + play news. But routines are static. You configure them in advance. They don't generalize.
+
+"Turn off the sala and restart the coffee" isn't a routine. Alexa hears it, picks the most confident match, executes one command, and calls it done. The rest of your sentence disappears not because of a bug, but because the architecture was never designed to handle it.
+
+---
+
+## Why Feeding 1,100 Entities to an LLM Doesn't Work Either
 
 Home Assistant introduced LLM-based Assist as a way to handle natural language. The intent is right. The implementation has a scaling problem.
 

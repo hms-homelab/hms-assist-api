@@ -1,0 +1,5 @@
+build/
+tools/venv/
+.git/
+*.log
+docs/

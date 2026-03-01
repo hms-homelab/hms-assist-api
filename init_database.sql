@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS intent_results (
     id                 SERIAL PRIMARY KEY,
     command_id         INTEGER REFERENCES voice_commands(id) ON DELETE CASCADE,
     intent             VARCHAR(100),
-    tier               VARCHAR(10) CHECK (tier IN ('tier1','tier2','tier3a','tier3b')),
+    tier               VARCHAR(20) CHECK (tier IN ('tier1','tier2','tier3','tier2+tier3')),
     confidence         FLOAT CHECK (confidence >= 0 AND confidence <= 1),
     response_text      TEXT,
     processing_time_ms INTEGER,

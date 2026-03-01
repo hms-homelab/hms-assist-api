@@ -45,8 +45,9 @@ public:
 
     struct ServiceConfig {
         int port{8894};
-        float vector_similarity_threshold{0.82f};
+        float vector_similarity_threshold{0.65f};
         int vector_search_limit{5};
+        std::string tts_entity{"tts.piper"};  // HA TTS entity used for spoken responses
     };
 
     HAConfig ha;

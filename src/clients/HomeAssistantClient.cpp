@@ -55,6 +55,15 @@ std::string HomeAssistantClient::makeRequest(const std::string& endpoint, const 
 }
 
 std::vector<Entity> HomeAssistantClient::getAllEntities() {
+    {
+        std::lock_guard<std::mutex> lock(entityCacheMutex_);
+        auto age = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - entityCacheTime_).count();
+        if (!entityCache_.empty() && age < kEntityCacheTtlSeconds) {
+            return entityCache_;
+        }
+    }
+
     std::vector<Entity> entities;
 
     std::string response = makeRequest("/api/states");
@@ -81,6 +90,12 @@ std::vector<Entity> HomeAssistantClient::getAllEntities() {
 
             entities.push_back(entity);
         }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(entityCacheMutex_);
+        entityCache_ = entities;
+        entityCacheTime_ = std::chrono::steady_clock::now();
     }
 
     std::cout << "[HA Client] Fetched " << entities.size() << " entities" << std::endl;

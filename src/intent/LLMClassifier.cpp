@@ -1,283 +1,107 @@
 #include "intent/LLMClassifier.h"
-#include <iostream>
-#include <future>
 #include <chrono>
-#include <sstream>
+#include <future>
+#include <iostream>
 
-LLMClassifier::LLMClassifier(std::shared_ptr<OllamaClient> ollama,
-                               std::shared_ptr<HomeAssistantClient> haClient,
-                               std::shared_ptr<VectorSearchService> vectorSearch,
-                               const std::string& embedModel,
-                               const std::string& fastModel,
-                               const std::string& smartModel,
-                               float escalationThreshold)
-    : ollama_(ollama), ha_(haClient), vectorSearch_(vectorSearch),
-      embedModel_(embedModel), fastModel_(fastModel), smartModel_(smartModel),
-      escalationThreshold_(escalationThreshold) {}
-
-void LLMClassifier::refreshEntityCache(const std::vector<Entity>& entities) {
-    Json::Value arr(Json::arrayValue);
-    for (const auto& e : entities) {
-        if (e.domain == "sun" || e.domain == "person" ||
-            e.domain == "zone" || e.domain == "update") continue;
-        Json::Value item;
-        item["entity_id"]    = e.entity_id;
-        item["name"]         = e.friendly_name;
-        item["domain"]       = e.domain;
-        item["state"]        = e.state;
-        arr.append(item);
-    }
-    Json::StreamWriterBuilder wb;
-    wb["indentation"] = "";
-    entityCacheJson_ = Json::writeString(wb, arr);
-    std::cout << "[LLMClassifier] Entity cache refreshed (" << arr.size() << " entities)" << std::endl;
-}
-
-IntentResult LLMClassifier::classify(const VoiceCommand& command) {
-    auto start = std::chrono::steady_clock::now();
-
-    // If entity cache is empty, populate it now
-    if (entityCacheJson_.empty()) {
-        try {
-            auto entities = ha_->getAllEntities();
-            refreshEntityCache(entities);
-        } catch (const std::exception& e) {
-            std::cerr << "[LLMClassifier] Could not populate entity cache: " << e.what() << std::endl;
-        }
-    }
-
-    // Pre-filter entities: embed the command, grab the top 25 by cosine similarity.
-    // This shrinks the LLM context from ~1100 entities to ~25, letting the 8b
-    // model stay confident and avoid unnecessary escalation.
-    std::string filteredEntities = preFilterEntities(command);
-
-    // --- Tier 3a: fast model ---
-    std::string modelUsed = fastModel_;
-    Json::Value llmJson;
-    try {
-        llmJson = ollama_->chatJson(buildUserPrompt(command), fastModel_, buildSystemPrompt(filteredEntities));
-    } catch (const std::exception& e) {
-        std::cerr << "[LLMClassifier] Fast model failed: " << e.what() << std::endl;
-        IntentResult r;
-        r.success = false;
-        r.tier = "tier3a";
-        r.response_text = "I had trouble understanding that. Please try again.";
-        return r;
-    }
-
-    LLMPlan plan = parsePlan(llmJson);
-
-    // --- Tier 3b: escalate to smart model if needed ---
-    if (plan.escalate || plan.confidence < escalationThreshold_) {
-        std::cout << "[LLMClassifier] Escalating to smart model (escalate="
-                  << plan.escalate << ", confidence=" << plan.confidence << ")" << std::endl;
-        modelUsed = smartModel_;
-        try {
-            llmJson = ollama_->chatJson(buildUserPrompt(command), smartModel_, buildSystemPrompt(filteredEntities));
-            plan = parsePlan(llmJson);
-        } catch (const std::exception& e) {
-            std::cerr << "[LLMClassifier] Smart model failed: " << e.what() << std::endl;
-        }
-    }
-
-    IntentResult result = executePlan(plan, command, modelUsed);
-
-    auto end = std::chrono::steady_clock::now();
-    result.processing_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    return result;
-}
-
-LLMPlan LLMClassifier::parsePlan(const Json::Value& j) {
-    LLMPlan plan;
-    plan.escalate      = j.get("escalate", false).asBool();
-    plan.confidence    = j.get("confidence", 0.5f).asFloat();
-    plan.response_text = j.get("response_text", "").asString();
-
-    const Json::Value& cmds = j["commands"];
-    if (cmds.isArray()) {
-        for (const auto& c : cmds) {
-            LLMCommand cmd;
-            cmd.intent    = c.get("intent", "").asString();
-            cmd.entity_id = c.get("entity_id", "").asString();
-            cmd.domain    = c.get("domain", "").asString();
-            cmd.action    = c.get("action", "").asString();
-            cmd.params    = c.get("params", Json::Value());
-            if (!cmd.entity_id.empty() && !cmd.action.empty()) {
-                plan.commands.push_back(cmd);
-            }
-        }
-    }
-    return plan;
-}
-
-IntentResult LLMClassifier::executePlan(const LLMPlan& plan,
-                                         const VoiceCommand& command,
-                                         const std::string& modelUsed) {
-    IntentResult result;
-    result.tier          = (modelUsed == fastModel_) ? "tier3a" : "tier3b";
-    result.confidence    = plan.confidence;
-    result.response_text = plan.response_text;
-
-    if (plan.commands.empty()) {
-        result.success       = false;
-        result.response_text = plan.response_text.empty()
-            ? "I understood you but couldn't find a matching device."
-            : plan.response_text;
-        return result;
-    }
-
-    // Execute all commands in parallel
-    std::vector<std::future<bool>> futures;
-    for (const auto& cmd : plan.commands) {
-        futures.push_back(std::async(std::launch::async, [this, &cmd]() {
-            try {
-                return ha_->callService(cmd.domain, cmd.action, cmd.entity_id, cmd.params);
-            } catch (const std::exception& e) {
-                std::cerr << "[LLMClassifier] HA call failed for "
-                          << cmd.entity_id << ": " << e.what() << std::endl;
-                return false;
-            }
-        }));
-    }
-
-    // Collect results and build entities array
-    Json::Value executedCmds(Json::arrayValue);
-    bool allOk = true;
-    for (size_t i = 0; i < plan.commands.size(); ++i) {
-        bool ok = futures[i].get();
-        allOk = allOk && ok;
-
-        Json::Value cmdResult;
-        cmdResult["intent"]    = plan.commands[i].intent;
-        cmdResult["entity_id"] = plan.commands[i].entity_id;
-        cmdResult["action"]    = plan.commands[i].action;
-        cmdResult["success"]   = ok;
-
-        // Get updated state
-        try {
-            Entity updated = ha_->getEntityState(plan.commands[i].entity_id);
-            cmdResult["state"] = updated.state;
-        } catch (...) {}
-
-        executedCmds.append(cmdResult);
-    }
-
-    result.success               = allOk;
-    result.intent                = plan.commands.size() == 1
-                                    ? plan.commands[0].intent
-                                    : "multi_command";
-    result.entities["commands"]  = executedCmds;
-    result.entities["model_used"] = modelUsed;
-
-    if (result.response_text.empty()) {
-        result.response_text = allOk ? "Done." : "Some commands could not be executed.";
-    }
-
-    return result;
-}
-
-std::string LLMClassifier::buildSystemPrompt(const std::string& entityJson) const {
-    return R"(You are a smart home voice assistant. Parse voice commands into Home Assistant service calls.
-
-Output ONLY a single JSON object. No prose, no explanation, no markdown.
-
-Example — "turn off the coffee maker and turn on sala 1":
-{"commands":[{"intent":"turn_off_coffee","entity_id":"switch.coffee","domain":"switch","action":"turn_off","params":{}},{"intent":"turn_on_sala_1","entity_id":"light.sala_1","domain":"light","action":"turn_on","params":{}}],"escalate":false,"confidence":0.95,"response_text":"Turned off the coffee maker and turned on Sala 1."}
-
-Rules:
-- commands: array of HA service calls. One entry per device/entity.
-- entity_id: must be an exact match from the Available entities list below.
-- action: one of turn_on | turn_off | toggle | lock | unlock | set_temperature | media_play_pause | media_next_track | media_previous_track | open_cover | close_cover | stop_cover
-- params: {} unless action is set_temperature, then {"temperature": <number>}
-- confidence: 0.9-1.0 when entities are clearly matched; 0.5-0.8 when uncertain
-- escalate: true only if no entity matches or the command needs web/external data
-- Non-HA requests (jokes, questions): return commands:[] with escalate:false and answer in response_text
-- response_text: short natural language confirmation of what was done)" +
-           std::string("\n\nAvailable entities:\n") + entityJson;
-}
-
-std::string LLMClassifier::preFilterEntities(const VoiceCommand& command) const {
-    // Embed the command and retrieve top-25 candidates from pgvector.
-    // This keeps the LLM context small enough for the 8b model to stay confident.
-    try {
-        std::vector<float> queryVec = ollama_->embed("search_query: " + command.text, embedModel_);
-        // threshold=0.0 → return whatever the top-25 are regardless of score
-        std::vector<EntityMatch> matches = vectorSearch_->search(queryVec, 0.0f, 25);
-
-        Json::Value arr(Json::arrayValue);
-        for (const auto& m : matches) {
-            Json::Value item;
-            item["entity_id"] = m.entity_id;
-            item["name"]      = m.friendly_name;
-            item["domain"]    = m.domain;
-            item["state"]     = m.state;
-            arr.append(item);
-        }
-        Json::StreamWriterBuilder wb;
-        wb["indentation"] = "";
-        return Json::writeString(wb, arr);
-    } catch (const std::exception& e) {
-        std::cerr << "[LLMClassifier] preFilterEntities failed: " << e.what()
-                  << " — falling back to full entity cache" << std::endl;
-        return entityCacheJson_;
-    }
-}
-
-SplitResult LLMClassifier::split(const VoiceCommand& command) {
-    static const std::string kSplitPrompt = R"(Split a compound voice command into individual smart home sub-commands.
+// Temperature 0 — deterministic. Extracts HA sub-commands only.
+// Key fix: "Use EXACT original wording" prevents paraphrasing of entity names.
+// No escalate field, no non_ha generation.
+static const std::string kCommandPrompt = R"(Parse the voice command and extract ONLY smart home device commands.
 
 Output ONLY a JSON object. No prose.
 
-Each sub-command has:
-- "text": the command string
-- "wait_for_previous": true if this command must wait for ALL previous commands to finish first
+Fields:
+- "sub_commands": array of HA device/automation commands (may be empty)
+- "has_non_ha": true if the command contains non-HA content (jokes, questions, facts, weather)
 
-wait_for_previous:true when THIS command depends on a previous one completing:
-- same device second step: turn off coffee (wait_for_previous:false), turn on coffee (wait_for_previous:TRUE)
-- explicit ordering: "first ... then ..." → second command gets wait_for_previous:true
-- logical dependency: unlock door (wait_for_previous:false), open door (wait_for_previous:TRUE)
+Each sub-command:
+- "text": Use EXACT original wording from the voice input — do NOT translate, paraphrase, or reword
+- "wait_for_previous": true if this must execute after all currently running commands finish
 
-wait_for_previous:false when this command is independent (different device, no ordering needed).
-The FIRST sub-command always has wait_for_previous:false.
-
-Example 1 — all independent:
-"turn off sala 1 and turn on coffee and tell me a joke about dogs"
-{"sub_commands":[{"text":"turn off sala 1","wait_for_previous":false},{"text":"turn on coffee","wait_for_previous":false}],"non_ha":"Why do dogs make terrible DJs? Because they always paws the music."}
-
-Example 2 — restart (turn on MUST wait for turn off):
-"restart the router and turn on the TV"
-{"sub_commands":[{"text":"turn off router","wait_for_previous":false},{"text":"turn on router","wait_for_previous":true},{"text":"turn on TV","wait_for_previous":false}],"non_ha":""}
-
-Example 3 — explicit then:
-"turn off coffee and then turn it back on"
-{"sub_commands":[{"text":"turn off coffee","wait_for_previous":false},{"text":"turn on coffee","wait_for_previous":true}],"non_ha":""}
+wait_for_previous rules:
+- Same device, second step: first cmd is false, second is true
+- Explicit order ("first ... then ..."): second cmd is true
+- Independent devices: always false
+- First sub-command always has wait_for_previous:false
 
 Rules:
-- sub_commands: ONLY device/automation commands — turn on/off, lock/unlock, play/pause, open/close, set temperature
-- non_ha: EVERYTHING else — jokes, questions, chat, weather, facts. Generate the actual answer here, not a placeholder.
-- "tell me", "what is", "who", "why", "how", "joke", "story" → always non_ha, never sub_commands
-- Keep each sub_command text close to the original wording.)";
+- sub_commands: ONLY HA commands (turn on/off, lock/unlock, open/close, set temperature, play/pause)
+- "tell me", "what is", "who", "why", "how", "joke", "story", "weather" → NEVER in sub_commands → has_non_ha:true
 
-    Json::Value llmJson;
+Examples:
+"turn off coffee and turn on sala 1" → {"sub_commands":[{"text":"turn off coffee","wait_for_previous":false},{"text":"turn on sala 1","wait_for_previous":false}],"has_non_ha":false}
+"turn on sala 1 and tell me a joke" → {"sub_commands":[{"text":"turn on sala 1","wait_for_previous":false}],"has_non_ha":true}
+"tell me a joke about dogs" → {"sub_commands":[],"has_non_ha":true}
+"turn off coffee and then turn it back on" → {"sub_commands":[{"text":"turn off coffee","wait_for_previous":false},{"text":"turn on coffee","wait_for_previous":true}],"has_non_ha":false}
+"what is the outdoor temperature" → {"sub_commands":[],"has_non_ha":true})";
+
+// Temperature 0.7 — creative. Generates non-HA answer only.
+// No escalate field — escalation is confidence-only.
+static const std::string kNonHaPrompt = R"(Answer the non-smart-home part of this voice command (jokes, facts, questions, stories).
+
+Output ONLY a JSON object. No prose.
+
+Fields:
+- "non_ha": your complete answer. Empty string if the command has no non-HA content.
+- "confidence": 0.9-1.0 when certain of your answer; 0.5-0.8 when uncertain
+
+Rules:
+- Only answer jokes, questions, facts — NOT device commands
+- If you need live data (current weather, news, current time): respond naturally, e.g. "I don't have live weather data right now, but check your weather app!"
+- Do NOT include an "escalate" field
+
+Examples:
+"tell me a joke about dogs" → {"non_ha":"Why do dogs make terrible DJs? Because they always paws the music.","confidence":0.95}
+"turn off sala 1 and tell me a joke" → {"non_ha":"Why can't sala lights ever be on time? They're always a little dim!","confidence":0.9}
+"what is the capital of France" → {"non_ha":"The capital of France is Paris.","confidence":0.99}
+"tell me how the weather is" → {"non_ha":"I don't have live weather data right now, but check your weather app!","confidence":0.8}
+"turn off sala 1 and turn on coffee" → {"non_ha":"","confidence":1.0})";
+
+LLMClassifier::LLMClassifier(std::shared_ptr<OllamaClient> ollama,
+                               const std::string& fastModel,
+                               const std::string& smartModel,
+                               float escalationThreshold)
+    : ollama_(ollama), fastModel_(fastModel),
+      smartModel_(smartModel), escalationThreshold_(escalationThreshold) {}
+
+SplitResult LLMClassifier::split(const VoiceCommand& command) {
+    SplitResult result;
+
+    std::string userMsg = "Voice command: \"" + command.text + "\"";
+
+    auto t0 = std::chrono::steady_clock::now();
+
+    // Two parallel async calls: command extraction (temp 0) + non_ha generation (temp 0.7)
+    auto cmdFuture = std::async(std::launch::async, [this, userMsg]() {
+        return ollama_->chatJson(userMsg, fastModel_, kCommandPrompt, 0.0f);
+    });
+    auto nonHaFuture = std::async(std::launch::async, [this, userMsg]() {
+        return ollama_->chatJson(userMsg, fastModel_, kNonHaPrompt, 0.7f);
+    });
+
+    // Collect command call result
+    Json::Value cmdJson;
     try {
-        llmJson = ollama_->chatJson(
-            "Voice command: \"" + command.text + "\"",
-            fastModel_,
-            kSplitPrompt
-        );
+        cmdJson = cmdFuture.get();
     } catch (const std::exception& e) {
-        std::cerr << "[LLMClassifier] split() failed: " << e.what() << std::endl;
-        return {};
+        std::cerr << "[LLMClassifier] command call failed: " << e.what() << std::endl;
+        cmdJson = Json::Value(Json::objectValue);
     }
 
-    SplitResult result;
-    result.non_ha = llmJson.get("non_ha", "").asString();
-    const Json::Value& arr = llmJson["sub_commands"];
+    // Collect non_ha call result
+    Json::Value nonHaJson;
+    try {
+        nonHaJson = nonHaFuture.get();
+    } catch (const std::exception& e) {
+        std::cerr << "[LLMClassifier] non_ha call failed: " << e.what() << std::endl;
+        nonHaJson = Json::Value(Json::objectValue);
+    }
+
+    // Parse sub_commands from command call
+    const Json::Value& arr = cmdJson["sub_commands"];
     if (arr.isArray()) {
         for (const auto& v : arr) {
-            if (v.isString()) {
-                result.sub_commands.push_back({v.asString(), false});
-            } else if (v.isObject()) {
+            if (v.isObject()) {
                 SubCommand sc;
                 sc.text              = v.get("text", "").asString();
                 sc.wait_for_previous = v.get("wait_for_previous", false).asBool();
@@ -285,15 +109,36 @@ Rules:
             }
         }
     }
-    return result;
-}
 
-std::string LLMClassifier::buildUserPrompt(const VoiceCommand& command) const {
-    std::ostringstream oss;
-    oss << "Voice command: \"" << command.text << "\"\n";
-    if (!command.context.empty()) {
-        oss << "Context: " << command.context << "\n";
+    // Parse non_ha from non_ha call
+    result.non_ha     = nonHaJson.get("non_ha", "").asString();
+    result.confidence = nonHaJson.get("confidence", 1.0f).asFloat();
+
+    auto llmMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    std::cout << "[LLMClassifier] parallel split: " << llmMs << "ms"
+              << " sub_commands=" << result.sub_commands.size()
+              << " non_ha=" << (result.non_ha.empty() ? "no" : "yes")
+              << " confidence=" << result.confidence << std::endl;
+
+    // Escalation: confidence-only (no escalate field from model)
+    bool needsEscalation = !result.non_ha.empty() && result.confidence < escalationThreshold_;
+    if (needsEscalation) {
+        std::cout << "[LLMClassifier] escalating non_ha to smart model"
+                  << " (confidence=" << result.confidence << ")" << std::endl;
+        auto t1 = std::chrono::steady_clock::now();
+        try {
+            Json::Value smartJson = ollama_->chatJson(userMsg, smartModel_, kNonHaPrompt, 0.7f);
+            result.non_ha     = smartJson.get("non_ha", result.non_ha).asString();
+            result.confidence = smartJson.get("confidence", result.confidence).asFloat();
+        } catch (const std::exception& e) {
+            std::cerr << "[LLMClassifier] smart model failed: " << e.what() << std::endl;
+        }
+        std::cout << "[LLMClassifier] smart model: "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - t1).count() << "ms" << std::endl;
     }
-    oss << "Device: " << command.device_id;
-    return oss.str();
+
+    return result;
 }

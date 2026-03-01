@@ -9,7 +9,9 @@ struct VoiceCommand {
     std::string device_id;
     std::string text;
     float confidence{1.0f};
-    std::string context;  // JSON string: room, last_intent, etc.
+    std::string context;          // JSON string: room, last_intent, etc.
+    std::string already_executed; // reserved, no longer used by pipeline
+    bool dry_run{false};          // if true: resolve entity_id but do NOT call HA service
 };
 
 struct IntentResult {
@@ -29,7 +31,9 @@ struct SubCommand {
 
 struct SplitResult {
     std::vector<SubCommand> sub_commands;
-    std::string non_ha;  // answer for non-HA parts (jokes, questions)
+    std::string non_ha;       // answer for non-HA parts (jokes, questions)
+    float confidence{1.0f};   // fast model confidence in the non_ha answer
+    bool escalate{false};     // fast model requests smart model escalation
 };
 
 class IntentClassifier {

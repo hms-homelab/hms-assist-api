@@ -2,9 +2,9 @@
 E2E tests for hms-assist-sync against real infrastructure.
 
 Requirements:
-  - PostgreSQL at 192.168.2.15:5432 (hms_assist DB with schema applied)
-  - Ollama at 192.168.2.5:11434 (nomic-embed-text model loaded)
-  - Home Assistant at 192.168.2.7:8123 (with a valid token)
+  - PostgreSQL at <db-host>:5432 (hms_assist DB with schema applied)
+  - Ollama at <ollama-host>:11434 (nomic-embed-text model loaded)
+  - Home Assistant at <ha-host>:8123 (with a valid token)
   - Config at /etc/hms-assist/config.yaml (or HMS_ASSIST_CONFIG env var)
 
 Run:

@@ -287,12 +287,12 @@ maestro_hub/
 ### Wyoming Protocol
 
 **Whisper STT:**
-- POST `http://192.168.2.5:10300/transcribe`
+- POST `http://<wyoming-host>:10300/transcribe`
 - Content-Type: `audio/wav`
 - Response: `{"text": "transcribed command"}`
 
 **Piper TTS:**
-- POST `http://192.168.2.5:10200/api/tts`
+- POST `http://<wyoming-host>:10200/api/tts`
 - Content-Type: `text/plain`
 - Response: WAV audio stream
 
@@ -329,13 +329,13 @@ idf.py -p /dev/ttyUSB0 flash monitor
 **Via MQTT (simulated):**
 ```bash
 # Publish test STT result
-mosquitto_pub -h 192.168.2.15 -t 'hms_assist/voice/test_device/stt_result' \
-  -u aamat -P exploracion \
+mosquitto_pub -h <mqtt-host> -t 'hms_assist/voice/test_device/stt_result' \
+  -u <mqtt-user> -P <mqtt-pass> \
   -m '{"text": "turn on kitchen light", "confidence": 0.95}'
 
 # Subscribe to intent results
-mosquitto_sub -h 192.168.2.15 -t 'hms_assist/voice/+/intent_result' \
-  -u aamat -P exploracion -v
+mosquitto_sub -h <mqtt-host> -t 'hms_assist/voice/+/intent_result' \
+  -u <mqtt-user> -P <mqtt-pass> -v
 ```
 
 **Via Voice (after ESP32 flashed):**
@@ -367,7 +367,7 @@ psql -h localhost -U maestro -d hms_assist -c "SELECT * FROM command_statistics;
 - Target: ~20ms classification, 15-20% coverage
 
 ### Tier 3: LLM Classifier (~1,500 lines)
-- Ollama HTTP client (llama3.1:8b @ 192.168.2.5:11434)
+- Ollama HTTP client (llama3.1:8b @ `<ollama-host>:11434`)
 - Context-aware prompting with HA entities
 - Multi-intent parsing and sequential execution
 - Target: 500-1500ms classification, 5-10% coverage

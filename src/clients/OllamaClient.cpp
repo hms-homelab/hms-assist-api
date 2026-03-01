@@ -77,13 +77,26 @@ std::string OllamaClient::chat(const std::string& userPrompt,
 
 Json::Value OllamaClient::chatJson(const std::string& userPrompt,
                                     const std::string& model,
-                                    const std::string& systemPrompt) {
+                                    const std::string& systemPrompt,
+                                    float temperature) {
     // Build request with format:"json" — Ollama enforces JSON output at the API
     // level regardless of model size, so the 8b model can't write prose.
     Json::Value req;
     req["model"]  = model;
     req["stream"] = false;
     req["format"] = "json";
+
+    // Pin context window to avoid KV cache reallocation on every context switch
+    // (different system prompts between split() and classify() calls).
+    // num_predict caps generation so the model can't ramble past the JSON.
+    // temperature:0 removes sampling overhead and gives deterministic JSON.
+    Json::Value opts;
+    opts["num_ctx"]     = 2048;
+    opts["num_predict"] = 1000;
+    opts["temperature"] = temperature;
+    req["options"]      = opts;
+    req["keep_alive"]   = -1;
+    req["keep_alive"]   = -1;  // never unload from VRAM between requests
 
     Json::Value messages(Json::arrayValue);
     if (!systemPrompt.empty()) {

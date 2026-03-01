@@ -18,7 +18,7 @@ source .secrets
 smbclient //$HA_SMB_HOST/config -U $HA_SMB_USER%$HA_SMB_PASS -c "put ha_patio_lights_template.yaml"
 
 # OR via SSH if you have access
-scp ha_patio_lights_template.yaml homeassistant@192.168.2.7:/config/
+scp ha_patio_lights_template.yaml homeassistant@<ha-host>:/config/
 ```
 
 ### 2. Update configuration.yaml
@@ -50,7 +50,7 @@ automation: !include_dir_merge_list automations/
 
 # OR via API
 curl -X POST -H "Authorization: Bearer $HA_BEARER_TOKEN" \
-  http://192.168.2.7:8123/api/services/homeassistant/restart
+  http://<ha-host>:8123/api/services/homeassistant/restart
 ```
 
 ### 4. Verify the Light Entity
@@ -59,7 +59,7 @@ After restart, check that the light entity exists:
 
 ```bash
 curl -s -H "Authorization: Bearer $HA_BEARER_TOKEN" \
-  "http://192.168.2.7:8123/api/states/light.patio" | python3 -m json.tool
+  "http://<ha-host>:8123/api/states/light.patio" | python3 -m json.tool
 ```
 
 You should see a light entity called `light.patio` with brightness support.

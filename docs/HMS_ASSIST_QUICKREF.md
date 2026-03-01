@@ -137,7 +137,7 @@ FROM intent_results GROUP BY tier ORDER BY tier;
 ## Config Fields
 
 ```yaml
-homeassistant.url:                  # HA instance (http://192.168.2.7:8123)
+homeassistant.url:                  # HA instance (http://<ha-host>:8123)
 homeassistant.token:                # Long-lived access token
 database.ha_db_name:                # HA recorder DB for fast entity sync (optional)
 ollama.embed_model:                 # nomic-embed-text (768-dim)
