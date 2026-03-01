@@ -1,7 +1,7 @@
 # Stage 1: build
 FROM debian:bookworm-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake g++ git ca-certificates \
+    cmake make g++ git ca-certificates \
     libjsoncpp-dev libssl-dev uuid-dev zlib1g-dev \
     libcurl4-openssl-dev libyaml-cpp-dev \
     libpqxx-dev libpq-dev libgtest-dev libgmock-dev \
@@ -28,7 +28,6 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libjsoncpp25 libcurl4 libssl3 libuuid1 zlib1g libpq5 \
     && rm -rf /var/lib/apt/lists/*
-# Copy versioned libs that differ from bookworm-slim defaults
 COPY --from=builder /usr/lib/x86_64-linux-gnu/libyaml-cpp* /usr/lib/x86_64-linux-gnu/
 COPY --from=builder /usr/lib/x86_64-linux-gnu/libpqxx* /usr/lib/x86_64-linux-gnu/
 COPY --from=builder /usr/local/lib/libdrogon* /usr/local/lib/
