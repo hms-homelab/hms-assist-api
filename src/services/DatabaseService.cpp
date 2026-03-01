@@ -28,7 +28,7 @@ bool DatabaseService::connect() {
 
 void DatabaseService::disconnect() {
     if (conn_ && conn_->is_open()) {
-        conn_->close();
+        conn_.reset();
         connected_ = false;
         std::cout << "[Database] Disconnected" << std::endl;
     }
