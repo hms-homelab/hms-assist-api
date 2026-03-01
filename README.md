@@ -1,9 +1,8 @@
 # hms-assist-api
 
-[![Docker](https://ghcr-badge.egpl.dev/hms-homelab/hms-assist-api/size)](https://github.com/hms-homelab/hms-assist-api/pkgs/container/hms-assist-api)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-%23FFDD00.svg?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/aamat09)
 [![Build](https://github.com/hms-homelab/hms-assist-api/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/hms-homelab/hms-assist-api/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-%23FFDD00.svg?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/aamat09)
 
 **100% local voice assistant API with 3-tier intent classification and Home Assistant integration.**
 
