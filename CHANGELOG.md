@@ -5,6 +5,124 @@ All notable changes to hms-assist-api will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`VectorSearchService::entityCount()`**: replaced `.one_row()` with `.exec1()` for
+  compatibility with libpqxx 7.7 (Debian bookworm). `.one_row()` was added in pqxx 7.8
+  and caused a compile error in the Docker build stage.
+- **`DatabaseService::disconnect()`**: replaced `conn_->close()` (protected in pqxx 7.7+)
+  with `conn_.reset()`, which cleanly destroys the connection via RAII.
+- **`EntityIngestService`**: added missing `#include <algorithm>` for `std::replace` used
+  in the `friendly_name` underscore-to-space conversion path.
+
+### Changed
+- **`VectorSearchService::entityCount()`** is now `virtual` — enables mocking in unit tests
+  and consistent with other service methods.
+- **`VectorSearchService::toVectorLiteral()`** moved from `private` to `public static` —
+  pure utility with no side effects, useful for testing and external tooling.
+
+### Tests Added
+- `test_vector_search_service.cpp` (8 tests): `toVectorLiteral` formatting (empty, single,
+  multi, negative, 768-dim), `entityCount()` virtual dispatch via `MockVectorSearchService`.
+- `test_database_service.cpp` (8 tests): initial-state guards, all not-connected operations
+  return safe defaults, `disconnect()` idempotency regression test (pqxx 7.7 compat).
+
+---
+
+## [2.6.0] - 2026-03-01
+
+### Added
+- **`dry_run` mode** (`VoiceCommand::dry_run`): classifiers resolve `entity_id` but skip all
+  HA service calls and state fetches. Used internally by the compound dedup phase to probe
+  which entity a Tier3 sub-command resolves to without executing it.
+- **`regexSplitCompound()`** static helper in `CommandController`: splits command text on hard
+  dividers (`and`, `then`, `followed by`, `after that`) via regex; fuzzy fallback detects 2+
+  action-verb phrases (turn on/off, lock, unlock, pause, toggle, etc.) and splits before the
+  second occurrence. Returns a single-element vector when no compound structure found.
+- **TTS spoken response**: `POST /api/v1/command` now accepts optional
+  `"media_player_entity_id"` field. When present and the pipeline produces a non-empty
+  `response_text`, the API calls `ha.callService("tts","speak","<tts_entity>",{message,
+  media_player_entity_id})` so the satellite device hears the response. TTS entity configured
+  via `service.tts_entity` in config (default `"tts.piper"`).
+- **`service.tts_entity`** config field (`ConfigManager::ServiceConfig::tts_entity`).
+
+### Changed
+- **Compound command architecture rewrite** (parallel Tier2 + dedup):
+  - Tier1 miss → detect compound with `regexSplitCompound()`
+  - If compound: launch Tier2 on each regex-split part in parallel AND Tier3 `split()` on
+    the full command in parallel (Phase 1, ~3s wall time dominated by Tier3)
+  - Collect Tier2 results → build `executedEntityIds` set
+  - Dry-run resolve each Tier3 sub-command via Tier2 in parallel (Phase 2)
+  - Any Tier3 sub-command whose resolved `entity_id` is already in `executedEntityIds` is
+    **skipped deterministically** (no LLM asked to filter, no hallucination risk)
+  - Execute remaining sub-commands via `executeSplit()` (Phase 3)
+  - Tier label: `"tier2"` if all handled by Tier2 or all deduped; `"tier2+tier3"` if some
+    remainder executed; `"tier3"` if Tier2 was empty and Tier3 handled everything
+- **`CommandController` constructor** now accepts `shared_ptr<HomeAssistantClient>` and
+  `ttsEntity` string (needed for TTS response delivery).
+- **`DeterministicClassifier`** all `process*` methods: HA calls gated on `!command.dry_run`.
+  Entity resolution still runs in dry_run mode; `success=true` returned without HA execution.
+- **`EmbeddingClassifier`**: HA `callService` + `sleep` + `getEntityState` block gated on
+  `!command.dry_run`. Same for the restart path. `response_text` is empty in dry_run mode.
+- **Model switch**: `fast_model` changed from `qwen2.5:3b` → `llama3.2:3b` in config.
+  `qwen2.5:3b` deleted from Ollama server (hallucinated wrong entities when given context hints).
+
+### Fixed
+- **DB schema**: `intent_results.tier` column `VARCHAR(10)` → `VARCHAR(20)`, CHECK constraint
+  updated to allow `'tier2+tier3'` (was rejected as 11 chars, causing DB log errors).
+  Existing `tier3a`/`tier3b` rows migrated to `tier3`.
+
+## [2.5.0] - 2026-03-01
+
+### Fixed
+- **Compound command Tier2+Tier3 partial execution bug**: when Tier2 matched the first
+  sub-command of a compound ("turn off sala 1 and turn on coffee"), it returned immediately
+  leaving the second part unexecuted. Tier2 now passes `already_executed` context to Tier3
+  split — the LLM excludes the already-handled sub-command and returns only the remainder.
+  Both parts now execute correctly.
+
+### Changed
+- **`CommandController::executeSplit()` extracted as private helper**: eliminates the
+  duplicated wave-execution code that existed in both the Tier2+Tier3 and Tier3-only paths.
+  Single implementation handles `wait_for_previous` wave logic, parallel `std::async`
+  dispatch, response concatenation, and JSON entity building.
+- **Tier3 split is now sequential after Tier2** (not parallel): previously Tier3 was
+  launched in parallel via `std::async` before Tier2 finished, so it could not receive
+  `already_executed` context and `command` was captured by reference (dangling-ref risk).
+  The parallel pre-launch is removed; Tier3 is called only after Tier2 confirms a hit.
+
+## [2.4.0] - 2026-03-01
+
+### Changed
+- **Tier3 redesign — pure text parser, zero entity context**: `LLMClassifier::classify()`
+  and all entity-related infrastructure removed (`preFilterEntities`, `buildSystemPrompt`,
+  `parsePlan`, `executePlan`, `entityCacheJson`, `refreshEntityCache`, `LLMCommand`,
+  `LLMPlan`). Tier3 is now exclusively a text splitter — no entity IDs are ever passed to
+  the LLM. Entity resolution always happens in Tier1/Tier2 after the split.
+- **Unified pipeline**: `isCompound` gate removed from `CommandController::runPipeline()`.
+  Tier1 fail → Tier2 fail → Tier3 `split()` for ALL commands (single or compound). Each
+  sub-command routes back through `runSinglePipeline()` (tier1 → tier2).
+- **Non-HA escalation**: fast model (`llama3.1:8b`) answers jokes/questions directly. If
+  `confidence < escalation_threshold` or `escalate:true` is set, re-calls smart model
+  (`gpt-oss:120b-cloud`) for current events, deep reasoning, or complex answers.
+- **Ollama `num_ctx` pinned to 1024**: prevents KV cache reallocation on context switches
+  between `split()` calls (was using default oversized context, spilling to system RAM on
+  RTX 3050 with only 584 MB VRAM free after model weights). Warm call latency: ~8s → ~2s.
+- **`num_predict: 200`, `temperature: 0`** added to all `chatJson()` calls: caps generation,
+  removes sampling overhead, deterministic JSON output.
+
+### Fixed
+- **Entity cache added to `HomeAssistantClient::getAllEntities()`**: 5-minute TTL with
+  mutex. Was fetching all 1185 HA entities on every request (including Tier1 hits).
+- **Plural "lights" regex**: all light patterns changed from `\s+light` to `\s+lights?\b`.
+  Previously "turn off the lights" captured `"the"` as location → `findEntities("the")`
+  → 0 results → fell through to compound/LLM path unnecessarily.
+
+### Removed
+- `LLMClassifier` dependencies on `HomeAssistantClient`, `VectorSearchService`, `embedModel`
+  — Tier3 no longer touches HA or the vector DB directly.
+
 ## [2.3.0] - 2026-02-28
 
 ### Changed

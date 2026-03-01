@@ -17,11 +17,12 @@ struct EntityMatch {
 class VectorSearchService {
 public:
     explicit VectorSearchService(const std::string& connStr);
+    virtual ~VectorSearchService() = default;
 
     // Find top-K entities by cosine similarity to the given embedding
-    std::vector<EntityMatch> search(const std::vector<float>& embedding,
-                                    float threshold,
-                                    int limit = 5);
+    virtual std::vector<EntityMatch> search(const std::vector<float>& embedding,
+                                            float threshold,
+                                            int limit = 5);
 
     // Upsert a single entity embedding
     void upsertEntity(const std::string& entityId,
@@ -34,12 +35,13 @@ public:
     // Remove entities not in the provided set (cleanup after full sync)
     void pruneEntities(const std::vector<std::string>& activeEntityIds);
 
-    int entityCount();
+    virtual int entityCount();
+
+    // Public utility: formats a float vector as a pgvector literal "[a,b,c]"
+    static std::string toVectorLiteral(const std::vector<float>& vec);
 
 private:
     std::string connStr_;
-
-    static std::string toVectorLiteral(const std::vector<float>& vec);
 };
 
 #endif // VECTOR_SEARCH_SERVICE_H

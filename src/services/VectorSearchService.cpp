@@ -91,7 +91,7 @@ void VectorSearchService::pruneEntities(const std::vector<std::string>& activeEn
 int VectorSearchService::entityCount() {
     pqxx::connection conn(connStr_);
     pqxx::work txn(conn);
-    auto row = txn.exec("SELECT COUNT(*) FROM entity_embeddings").one_row();
+    auto row = txn.exec1("SELECT COUNT(*) FROM entity_embeddings");
     txn.commit();
     return row[0].as<int>();
 }
