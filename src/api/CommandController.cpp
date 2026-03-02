@@ -32,6 +32,7 @@ void CommandController::handleCommand(const drogon::HttpRequestPtr& req,
     command.text      = (*bodyJson)["text"].asString();
     command.device_id = (*bodyJson)["device_id"].asString();
     command.confidence = (*bodyJson).get("confidence", 1.0f).asFloat();
+    command.dry_run   = (*bodyJson).get("dry_run", false).asBool();
     command.context   = (*bodyJson).get("context", Json::Value()).toStyledString();
 
     if (command.text.empty()) {

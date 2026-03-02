@@ -255,7 +255,37 @@ TEST_F(EmbeddingClassifierTest, Classify_SensorEntity_IntentIsSensorQuery) {
     EXPECT_EQ(result.intent, "sensor_query");
 }
 
-// 8. tier is "tier2" for sensor query (same as all other Tier 2 results).
+// 8. Sensor domain is rejected when command has action words (turn off/on).
+TEST_F(EmbeddingClassifierTest, Classify_SensorEntity_RejectedWhenActionWords) {
+    EntityMatch m = makeEntityMatch("sensor.front_motion", "sensor",
+                                     "Front Object Detected", 0.71f);
+    ON_CALL(*vector_, search(_, _, _))
+        .WillByDefault(Return(std::vector<EntityMatch>{m}));
+
+    EXPECT_CALL(*ha_, getEntityState(_)).Times(0);
+    EXPECT_CALL(*ha_, callService(_, _, _, _)).Times(0);
+
+    VoiceCommand cmd;
+    cmd.text = "turn off sala 1";
+    auto result = cls_->classify(cmd);
+
+    EXPECT_FALSE(result.success);
+}
+
+TEST_F(EmbeddingClassifierTest, Classify_SensorEntity_RejectedOnToggle) {
+    EntityMatch m = makeEntityMatch("sensor.front_motion", "sensor",
+                                     "Front Object Detected", 0.75f);
+    ON_CALL(*vector_, search(_, _, _))
+        .WillByDefault(Return(std::vector<EntityMatch>{m}));
+
+    VoiceCommand cmd;
+    cmd.text = "toggle the fan";
+    auto result = cls_->classify(cmd);
+
+    EXPECT_FALSE(result.success);
+}
+
+// 9. tier is "tier2" for sensor query (same as all other Tier 2 results).
 TEST_F(EmbeddingClassifierTest, Classify_SensorEntity_TierIsTier2) {
     EntityMatch m = makeEntityMatch("sensor.awn_outdoor_temperature", "sensor",
                                      "AWN Outdoor Temperature");

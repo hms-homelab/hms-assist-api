@@ -172,7 +172,14 @@ std::string EmbeddingClassifier::inferAction(const std::string& text, const std:
         if (hasWord(t, "heat") || hasWord(t, "warm"))             return "set_temperature";
         return "set_temperature";
     }
-    if (domain == "sensor")       return "query_state";
+    if (domain == "sensor") {
+        // Reject sensor match when the user clearly wants to control a device
+        if (hasWord(t, "on") || hasWord(t, "off") || hasWord(t, "toggle")
+            || hasWord(t, "enable") || hasWord(t, "disable")
+            || hasWord(t, "restart") || hasWord(t, "reboot"))
+            return "";
+        return "query_state";
+    }
     if (domain == "scene")        return "turn_on";
     if (domain == "script")       return "turn_on";
     if (domain == "input_boolean") {

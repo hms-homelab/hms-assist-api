@@ -7,28 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [2.7.0] - 2026-03-02
+
+### Added
+- **Tier1 catch-all device patterns**: 5 new regex patterns (`turn on/off <name>`,
+  `switch on/off <name>`, `toggle <name>`) that match commands without a "light" suffix.
+  New `processDeviceControl` handler searches `light` domain first, then `switch`, enabling
+  commands like "turn off sala 1" and "turn off dinner" to resolve in <5ms via Tier1.
+- **E2E integration tests** (`TestMixedIntegration`, 6 tests): real LLM pipeline tests
+  mixing device actions, sensor queries, and non-HA content (jokes). Full Tier1/Tier2/Tier3
+  coverage with safe entities only (sala 1/2/3, dinner, coffee, sensors).
+- **E2E device control tests** (`TestDeviceControlTier1`, 6 tests): verify Tier1 catch-all
+  resolves sala 1/2/3, dinner, coffee correctly.
+- **E2E sensor rejection tests** (`TestSensorRejectionTier2`, 3 tests): verify action words
+  never return `sensor_query`.
+
 ### Fixed
-- **`VectorSearchService::entityCount()`**: replaced `.one_row()` with `.exec1()` for
-  compatibility with libpqxx 7.7 (Debian bookworm). `.one_row()` was added in pqxx 7.8
-  and caused a compile error in the Docker build stage.
-- **`DatabaseService::disconnect()`**: replaced `conn_->close()` (protected in pqxx 7.7+)
-  with `conn_.reset()`, which cleanly destroys the connection via RAII.
-- **`EntityIngestService`**: added missing `#include <algorithm>` for `std::replace` used
-  in the `friendly_name` underscore-to-space conversion path.
+- **Tier2 sensor false positive**: `inferAction()` now rejects sensor domain when the
+  command contains action words (on/off/toggle/enable/disable/restart/reboot). Previously
+  "turn off sala 1" could match a sensor entity at 0.71 similarity and return a sensor
+  reading instead of controlling the device.
+- **`dry_run` not parsed from HTTP request**: `CommandController::handleCommand()` was not
+  reading `dry_run` from the request JSON body, so all API calls executed live even when
+  `dry_run: true` was sent. Now correctly parsed via `bodyJson->get("dry_run", false)`.
+- **Tier1 pattern loop**: specific patterns (light, climate, lock) now break on match
+  regardless of handler success, preventing fallthrough to catch-all device patterns when
+  the entity simply doesn't exist.
 
 ### Changed
-- **`VectorSearchService::entityCount()`** is now `virtual` — enables mocking in unit tests
-  and consistent with other service methods.
-- **`VectorSearchService::toVectorLiteral()`** moved from `private` to `public static` —
-  pure utility with no side effects, useful for testing and external tooling.
+- **`VectorSearchService::entityCount()`** is now `virtual` — enables mocking in unit tests.
+- **`VectorSearchService::toVectorLiteral()`** moved from `private` to `public static`.
 
 ### Tests Added
-- `test_vector_search_service.cpp` (8 tests): `toVectorLiteral` formatting (empty, single,
-  multi, negative, 768-dim), `entityCount()` virtual dispatch via `MockVectorSearchService`.
-- `test_database_service.cpp` (8 tests): initial-state guards, all not-connected operations
-  return safe defaults, `disconnect()` idempotency regression test (pqxx 7.7 compat).
-
----
+- `test_vector_search_service.cpp` (8 tests): `toVectorLiteral` formatting, `entityCount()`.
+- `test_database_service.cpp` (8 tests): not-connected guards, `disconnect()` idempotency.
+- `test_deterministic_classifier.cpp` (+6 tests): device catch-all patterns.
+- `test_embedding_classifier.cpp` (+2 tests): sensor rejection on action words.
+- `test_api_e2e.py`: rewritten with safe entities, 26 total e2e tests.
 
 ## [2.6.0] - 2026-03-01
 

@@ -110,6 +110,38 @@ void DeterministicClassifier::initializePatterns() {
         "scene", "turn_on", {1}
     });
 
+    // Catch-all device control (no "light"/"door" suffix required)
+    // These MUST be last — specific patterns above take priority
+    patterns_.push_back({
+        "device_on",
+        std::regex(R"(turn\s+on\s+(?:the\s+)?(.+))", std::regex::icase),
+        "device", "turn_on", {1}
+    });
+
+    patterns_.push_back({
+        "device_off",
+        std::regex(R"(turn\s+off\s+(?:the\s+)?(.+))", std::regex::icase),
+        "device", "turn_off", {1}
+    });
+
+    patterns_.push_back({
+        "device_on",
+        std::regex(R"(switch\s+on\s+(?:the\s+)?(.+))", std::regex::icase),
+        "device", "turn_on", {1}
+    });
+
+    patterns_.push_back({
+        "device_off",
+        std::regex(R"(switch\s+off\s+(?:the\s+)?(.+))", std::regex::icase),
+        "device", "turn_off", {1}
+    });
+
+    patterns_.push_back({
+        "device_toggle",
+        std::regex(R"(toggle\s+(?:the\s+)?(.+))", std::regex::icase),
+        "device", "toggle", {1}
+    });
+
     std::cout << "[Deterministic] Initialized " << patterns_.size() << " intent patterns" << std::endl;
 }
 
@@ -129,13 +161,7 @@ IntentResult DeterministicClassifier::classify(const VoiceCommand& command) {
 
             // Route to appropriate handler
             if (pattern.domain == "light") {
-                if (pattern.action == "turn_on") {
-                    result = processLightControl(match, command);
-                } else if (pattern.action == "turn_off") {
-                    result = processLightControl(match, command);
-                } else if (pattern.action == "toggle") {
-                    result = processLightControl(match, command);
-                }
+                result = processLightControl(match, command);
             } else if (pattern.domain == "climate") {
                 result = processThermostatControl(match, command);
             } else if (pattern.domain == "lock") {
@@ -144,10 +170,17 @@ IntentResult DeterministicClassifier::classify(const VoiceCommand& command) {
                 result = processMediaControl(match, command);
             } else if (pattern.domain == "scene") {
                 result = processSceneControl(match, command);
+            } else if (pattern.domain == "device") {
+                result = processDeviceControl(match, command);
             }
 
-            if (result.success) {
-                break;  // Stop at first successful match
+            // Specific patterns (light, climate, etc.) are authoritative --
+            // if the handler ran, stop even on failure. Only catch-all
+            // "device" patterns should be skipped on failure so we don't
+            // shadow a later, better match. In practice catch-all is last
+            // so this just prevents falling through from specific → catch-all.
+            if (result.success || pattern.domain != "device") {
+                break;
             }
         }
     }
@@ -342,6 +375,61 @@ IntentResult DeterministicClassifier::processMediaControl(const std::smatch& mat
         result.response_text = "I've " + action_str;
     } else {
         result.response_text = "Sorry, I couldn't control the media player";
+    }
+
+    return result;
+}
+
+IntentResult DeterministicClassifier::processDeviceControl(const std::smatch& match, const VoiceCommand& command) {
+    IntentResult result;
+    result.tier = "tier1";
+
+    std::string location = match[1].str();
+
+    // Search light first, then switch
+    auto entities = haClient_->findEntities(location, "light");
+    if (entities.empty()) {
+        entities = haClient_->findEntities(location, "switch");
+    }
+
+    if (entities.empty()) {
+        result.success = false;
+        result.response_text = "I couldn't find a device matching '" + location + "'";
+        return result;
+    }
+
+    Entity device = entities[0];
+    std::string domain = device.entity_id.substr(0, device.entity_id.find('.'));
+    std::cout << "[Deterministic] Found device: " << device.entity_id
+              << " (" << device.friendly_name << ")" << std::endl;
+
+    bool success = false;
+    std::string action_str;
+
+    if (command.text.find("turn on") != std::string::npos || command.text.find("switch on") != std::string::npos) {
+        action_str = "turned on";
+        success = command.dry_run ? true : haClient_->callService(domain, "turn_on", device.entity_id, {});
+    } else if (command.text.find("turn off") != std::string::npos || command.text.find("switch off") != std::string::npos) {
+        action_str = "turned off";
+        success = command.dry_run ? true : haClient_->callService(domain, "turn_off", device.entity_id, {});
+    } else if (command.text.find("toggle") != std::string::npos) {
+        action_str = "toggled";
+        success = command.dry_run ? true : haClient_->callService(domain, "toggle", device.entity_id, {});
+    }
+
+    result.success = success;
+    result.intent = "device_control";
+    result.confidence = 0.90f;
+    result.entities["entity_id"] = device.entity_id;
+    result.entities["location"] = location;
+    result.entities["action"] = action_str;
+
+    if (command.dry_run) {
+        result.response_text = "";
+    } else if (success) {
+        result.response_text = "I've " + action_str + " the " + device.friendly_name;
+    } else {
+        result.response_text = "Sorry, I couldn't control the " + device.friendly_name;
     }
 
     return result;

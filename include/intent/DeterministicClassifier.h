@@ -28,6 +28,7 @@ private:
     IntentResult processThermostatControl(const std::smatch& match, const VoiceCommand& command);
     IntentResult processLockControl(const std::smatch& match, const VoiceCommand& command);
     IntentResult processMediaControl(const std::smatch& match, const VoiceCommand& command);
+    IntentResult processDeviceControl(const std::smatch& match, const VoiceCommand& command);
     IntentResult processSceneControl(const std::smatch& match, const VoiceCommand& command);
 
     std::shared_ptr<HomeAssistantClient> haClient_;

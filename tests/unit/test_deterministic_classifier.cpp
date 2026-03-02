@@ -348,6 +348,87 @@ TEST_F(DeterministicClassifierTest, SceneSetMode) {
 }
 
 
+// ─── Device control (catch-all: no "light"/"door" suffix) ────────────────────
+
+TEST_F(DeterministicClassifierTest, DeviceTurnOffMatchesLight) {
+    auto light = makeEntity("light.sala_1", "Sala 1");
+    EXPECT_CALL(*mock_ha_, findEntities("sala 1", "light"))
+        .WillOnce(Return(std::vector<Entity>{light}));
+    EXPECT_CALL(*mock_ha_, callService("light", "turn_off", "light.sala_1", _))
+        .WillOnce(Return(true));
+
+    auto r = classifier_->classify(cmd("turn off sala 1"));
+    EXPECT_TRUE(r.success);
+    EXPECT_EQ(r.intent, "device_control");
+    EXPECT_FLOAT_EQ(r.confidence, 0.90f);
+    EXPECT_THAT(r.response_text, HasSubstr("Sala 1"));
+}
+
+TEST_F(DeterministicClassifierTest, DeviceTurnOffFallsToSwitch) {
+    EXPECT_CALL(*mock_ha_, findEntities("dinner", "light"))
+        .WillOnce(Return(std::vector<Entity>{}));
+    auto sw = makeEntity("switch.dinner", "Dinner");
+    EXPECT_CALL(*mock_ha_, findEntities("dinner", "switch"))
+        .WillOnce(Return(std::vector<Entity>{sw}));
+    EXPECT_CALL(*mock_ha_, callService("switch", "turn_off", "switch.dinner", _))
+        .WillOnce(Return(true));
+
+    auto r = classifier_->classify(cmd("turn off dinner"));
+    EXPECT_TRUE(r.success);
+    EXPECT_EQ(r.intent, "device_control");
+    EXPECT_THAT(r.response_text, HasSubstr("Dinner"));
+}
+
+TEST_F(DeterministicClassifierTest, DeviceTurnOnMatchesSwitch) {
+    EXPECT_CALL(*mock_ha_, findEntities("lamp 1", "light"))
+        .WillOnce(Return(std::vector<Entity>{}));
+    auto sw = makeEntity("switch.lamp_1", "Lamp 1");
+    EXPECT_CALL(*mock_ha_, findEntities("lamp 1", "switch"))
+        .WillOnce(Return(std::vector<Entity>{sw}));
+    EXPECT_CALL(*mock_ha_, callService("switch", "turn_on", "switch.lamp_1", _))
+        .WillOnce(Return(true));
+
+    auto r = classifier_->classify(cmd("turn on lamp 1"));
+    EXPECT_TRUE(r.success);
+}
+
+TEST_F(DeterministicClassifierTest, DeviceToggle) {
+    auto light = makeEntity("light.gym", "Gym");
+    EXPECT_CALL(*mock_ha_, findEntities("gym", "light"))
+        .WillOnce(Return(std::vector<Entity>{light}));
+    EXPECT_CALL(*mock_ha_, callService("light", "toggle", "light.gym", _))
+        .WillOnce(Return(true));
+
+    auto r = classifier_->classify(cmd("toggle gym"));
+    EXPECT_TRUE(r.success);
+    EXPECT_EQ(r.intent, "device_control");
+}
+
+TEST_F(DeterministicClassifierTest, DeviceNotFoundReturnsFailure) {
+    EXPECT_CALL(*mock_ha_, findEntities("nonexistent", "light"))
+        .WillOnce(Return(std::vector<Entity>{}));
+    EXPECT_CALL(*mock_ha_, findEntities("nonexistent", "switch"))
+        .WillOnce(Return(std::vector<Entity>{}));
+
+    auto r = classifier_->classify(cmd("turn off nonexistent"));
+    EXPECT_FALSE(r.success);
+    EXPECT_THAT(r.response_text, HasSubstr("nonexistent"));
+}
+
+TEST_F(DeterministicClassifierTest, SpecificLightPatternStillWorks) {
+    // "turn off the kitchen light" should still match the specific light pattern
+    auto light = makeEntity("light.kitchen", "Kitchen");
+    EXPECT_CALL(*mock_ha_, findEntities("kitchen", "light"))
+        .WillOnce(Return(std::vector<Entity>{light}));
+    EXPECT_CALL(*mock_ha_, turnOff("light.kitchen"))
+        .WillOnce(Return(true));
+
+    auto r = classifier_->classify(cmd("turn off the kitchen light"));
+    EXPECT_TRUE(r.success);
+    EXPECT_EQ(r.intent, "light_control");  // NOT device_control
+}
+
+
 // ─── Processing time ─────────────────────────────────────────────────────────
 
 TEST_F(DeterministicClassifierTest, ProcessingTimeMsIsSet) {
